@@ -1,0 +1,500 @@
+<!DOCTYPE html>
+<html lang="ru" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <title>YaSave — Liquid Glass Yandex Music Downloader</title>
+  
+  <!-- Favicon and PWA -->
+  <link rel="icon" type="image/png" href="assets/icon.png">
+  <link rel="apple-touch-icon" href="assets/icon.png">
+  <meta name="theme-color" content="#0b0f19">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+
+  <!-- Google Fonts: Outfit & Inter for ultra-crisp modern typography -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Outfit:wght@500;600;700;800&display=swap" rel="stylesheet">
+
+  <!-- Immediate Zero-Flicker Session & Theme Hydration -->
+  <script>
+    (function() {
+      try {
+        const savedTheme = localStorage.getItem('yasave_theme');
+        if (savedTheme) {
+          document.documentElement.dataset.theme = savedTheme;
+        }
+        const savedAccent = localStorage.getItem('yasave_accent');
+        if (savedAccent) {
+          document.documentElement.style.setProperty('--accent', savedAccent);
+        }
+      } catch (e) {}
+    })();
+  </script>
+
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+  <!-- Ambient Dynamic Liquid Mesh Background -->
+  <div class="ambient-mesh" aria-hidden="true">
+    <div class="aura-orb orb-1"></div>
+    <div class="aura-orb orb-2"></div>
+    <div class="aura-orb orb-3"></div>
+    <div class="glass-noise-overlay"></div>
+  </div>
+
+  <!-- Minimalist Telegram / YouTube / Вкусно — и точка Style Splash Screen -->
+  <div id="splash-screen" class="splash-screen">
+    <div class="splash-minimal-content">
+      <div class="splash-logo-container">
+        <div class="splash-soft-glow"></div>
+        <img src="assets/icon.png" alt="YaSave Logo" class="splash-app-logo">
+      </div>
+      <h1 class="splash-brand-title">YaSave</h1>
+      <p class="splash-brand-subtitle">Музыка без границ</p>
+
+      <!-- Sleek 3-Dot Pulse Loader (Telegram Style) -->
+      <div class="splash-dots-loader">
+        <span class="dot dot-1"></span>
+        <span class="dot dot-2"></span>
+        <span class="dot dot-3"></span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Main App Shell -->
+  <div class="app-container">
+
+    <!-- Top Floating Header -->
+    <header class="app-header liquid-card">
+      <div class="header-brand">
+        <img src="assets/icon.png" alt="Icon" class="header-icon">
+        <div class="header-titles">
+          <span class="header-title">YaSave</span>
+          <span class="header-status-badge" id="header-user-status">Проверка...</span>
+        </div>
+      </div>
+      <div class="header-actions">
+        <button class="icon-btn" id="btn-theme-toggle" title="Сменить тему" aria-label="Сменить тему">
+          <svg class="theme-icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="5"></circle>
+            <line x1="12" y1="1" x2="12" y2="3"></line>
+            <line x1="12" y1="21" x2="12" y2="23"></line>
+            <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+            <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+            <line x1="1" y1="12" x2="3" y2="12"></line>
+            <line x1="21" y1="12" x2="23" y2="12"></line>
+            <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
+            <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+          </svg>
+          <svg class="theme-icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+          </svg>
+        </button>
+        <button class="icon-btn" id="btn-quick-token" title="Авторизация" aria-label="Авторизация">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 2l-2 2m-1.5 1.5L16 7l-1.5-1.5L13 7l1.5 1.5L13 10l-1.5-1.5L10 10l1.5 1.5L9 14l-4 4v4h4l4-4 2.5-2.5"></path>
+            <circle cx="7.5" cy="7.5" r="2.5"></circle>
+          </svg>
+        </button>
+      </div>
+    </header>
+
+    <!-- Scrollable Screen Content -->
+    <main class="screens-viewport">
+
+      <!-- ================= TAB 1: СКАЧАТЬ (DOWNLOADER) ================= -->
+      <section id="tab-download" class="screen-tab active">
+        
+        <!-- Input Liquid Card -->
+        <div class="liquid-card input-card">
+          <div class="input-card-header">
+            <label for="track-url-input">Ссылка на трек Яндекс Музыки</label>
+            <button type="button" class="text-pill-btn" id="btn-paste-clipboard">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"></path><rect x="8" y="2" width="8" height="4" rx="1" ry="1"></rect></svg>
+              Вставить
+            </button>
+          </div>
+          <div class="input-group">
+            <input 
+              type="text" 
+              id="track-url-input" 
+              placeholder="https://music.yandex.ru/album/.../track/..." 
+              autocomplete="off" 
+              spellcheck="false"
+            />
+            <button class="primary-btn search-btn" id="btn-fetch-track" title="Найти трек">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+            </button>
+          </div>
+        </div>
+
+        <!-- Hero Track Card (Preview) -->
+        <div id="track-hero-card" class="liquid-card track-card empty-state">
+          <div class="cover-wrapper">
+            <div class="vinyl-glow"></div>
+            <img id="track-cover-img" src="assets/cover.jpg" alt="Track Cover" class="cover-img">
+            <div class="playing-equalizer-badge hidden" id="card-equalizer">
+              <span></span><span></span><span></span>
+            </div>
+          </div>
+          
+          <div class="track-details">
+            <div class="track-badges-row">
+              <span class="badge badge-bitrate" id="badge-bitrate">320 kbps HQ</span>
+              <span class="badge badge-explicit hidden" id="badge-explicit">18+ EXPLICIT</span>
+            </div>
+            <h2 class="track-title" id="track-title">Трек не выбран</h2>
+            <p class="track-artist" id="track-artist">Вставьте ссылку выше для скачивания</p>
+            <div class="track-meta-row">
+              <span class="meta-item" id="track-duration">--:--</span>
+              <span class="meta-dot">•</span>
+              <span class="meta-item" id="track-album">Альбом</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Download Action Buttons -->
+        <div class="actions-stack">
+          <button class="liquid-button btn-glow-primary" id="btn-download-ym" disabled>
+            <div class="btn-shine"></div>
+            <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"></path></svg>
+            <span class="btn-text">Скачать из Яндекс Музыки (320 kbps)</span>
+          </button>
+
+          <button class="liquid-button btn-glass-accent" id="btn-find-uncensored" disabled>
+            <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="2" y1="12" x2="22" y2="12"></line><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path></svg>
+            <span class="btn-text">Найти без цензуры (Альтернативы)</span>
+          </button>
+        </div>
+
+        <!-- Liquid Glass Progress Bar -->
+        <div id="progress-container" class="liquid-card progress-card hidden">
+          <div class="progress-info-row">
+            <div class="progress-status-wrap">
+              <div class="pulsing-dot"></div>
+              <span class="progress-stage-text" id="progress-stage-text">Загрузка...</span>
+            </div>
+            <span class="progress-percent-badge" id="progress-percent">0%</span>
+          </div>
+
+          <div class="progress-track">
+            <div class="progress-fill" id="progress-fill" style="width: 0%;">
+              <div class="progress-shimmer"></div>
+            </div>
+          </div>
+
+          <div class="progress-footer-row">
+            <span class="progress-bytes" id="progress-bytes">0.0 / 0.0 МБ</span>
+            <span class="progress-speed" id="progress-speed"></span>
+          </div>
+        </div>
+
+        <!-- Success Result Card -->
+        <div id="result-success-card" class="liquid-card success-card hidden">
+          <div class="success-icon-wrap">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>
+          </div>
+          <div class="success-text-wrap">
+            <h4 class="success-title">Трек успешно сохранён!</h4>
+            <p class="success-filename" id="success-filename">Song.mp3</p>
+          </div>
+          <button class="liquid-button btn-glass-sm" id="btn-open-folder-action">
+            <svg class="btn-sm-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>
+            <span>Открыть папку</span>
+          </button>
+        </div>
+
+      </section>
+
+      <!-- ================= TAB 2: БЕЗ ЦЕНЗУРЫ (UNCENSORED ALTERNATIVES) ================= -->
+      <section id="tab-uncensored" class="screen-tab">
+        <div class="liquid-card section-hero-card">
+          <div class="hero-icon-pill">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path></svg>
+          </div>
+          <div class="hero-text-wrap">
+            <h3 class="hero-title">Поиск версий без цензуры</h3>
+            <p class="hero-desc">Поддержка SoundCloud, Spotify (Match) и YouTube с предпрослушиванием.</p>
+          </div>
+        </div>
+
+        <!-- Source Selector Filter Pills -->
+        <div class="source-filter-pills" id="source-filter-pills">
+          <button type="button" class="source-pill active" data-source="all">
+            <span class="pill-dot dot-all"></span>
+            Все источники
+          </button>
+          <button type="button" class="source-pill" data-source="soundcloud">
+            <svg class="pill-icon icon-sc" viewBox="0 0 24 24" fill="currentColor"><path d="M11.56 8.87V17h1.41V9.56c-.44-.45-.92-.69-1.41-.69zm-2.82 1.63V17h1.41v-6.5zm-2.82 2.45V17h1.41v-4.05zm-2.82 1.63V17h1.41v-2.42zm11.28-7.34C13.88 5.61 13.06 4 11.5 4c-.7 0-1.34.33-1.84.88v3.31c.56-.25 1.18-.39 1.84-.39 1.43 0 2.65 1.05 2.9 2.44zM18 9c-.28 0-.55.03-.82.1.28.53.44 1.13.44 1.77 0 2.05-1.55 3.73-3.53 3.96V17H20c2.21 0 4-1.79 4-4s-1.79-4-4-4z"/></svg>
+            SoundCloud
+          </button>
+          <button type="button" class="source-pill" data-source="spotify">
+            <svg class="pill-icon icon-sp" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.477 2 2 6.477 2 12c0 5.524 4.477 10 10 10s10-4.476 10-10c0-5.523-4.477-10-10-10zm4.586 14.424c-.18.295-.563.387-.857.207-2.35-1.434-5.308-1.758-8.793-.963-.335.077-.67-.133-.746-.469-.077-.334.132-.67.468-.745 3.808-.871 7.076-.505 9.721 1.113.294.18.386.563.207.857zm1.225-2.723c-.226.367-.709.482-1.075.257-2.687-1.652-6.785-2.131-9.965-1.166-.413.127-.848-.106-.973-.519-.125-.413.108-.848.52-.974 3.632-1.102 8.147-.568 11.235 1.328.366.226.481.709.258 1.074zm.105-2.835C14.692 8.95 9.375 8.775 6.297 9.71c-.494.15-1.016-.129-1.166-.624-.149-.495.13-1.016.625-1.166 3.532-1.073 9.404-.866 13.115 1.337.445.264.59.838.327 1.282-.264.443-.838.59-1.281.327z"/></svg>
+            Spotify Match
+          </button>
+          <button type="button" class="source-pill" data-source="youtube">
+            <svg class="pill-icon icon-yt" viewBox="0 0 24 24" fill="currentColor"><path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/></svg>
+            YouTube Music
+          </button>
+        </div>
+
+        <!-- Search Bar for Alternatives -->
+        <div class="liquid-card input-card">
+          <div class="input-group">
+            <input 
+              type="text" 
+              id="alt-search-input" 
+              placeholder="Введите название трека или ссылку (Spotify / SoundCloud / YouTube)..." 
+            />
+            <button class="primary-btn search-btn" id="btn-trigger-alt-search" title="Искать">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+            </button>
+          </div>
+        </div>
+
+        <!-- Alternatives Candidates List -->
+        <div id="alt-results-list" class="cards-list">
+          <div class="empty-placeholder">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"></circle><polygon points="10 8 16 12 10 16 10 8"></polygon></svg>
+            <p>Выберите трек во вкладке «Скачать» или введите поисковый запрос</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================= TAB 3: ИСТОРИЯ (LIBRARY) ================= -->
+      <section id="tab-history" class="screen-tab">
+        <div class="liquid-card section-hero-card">
+          <div class="hero-icon-pill">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>
+          </div>
+          <div class="hero-text-wrap">
+            <h3 class="hero-title">Скачанные треки</h3>
+            <p class="hero-desc" id="history-folder-label">Загрузки сохранены в Downloads/YaSave</p>
+          </div>
+          <button class="icon-btn" id="btn-refresh-history" title="Обновить">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"></polyline><polyline points="1 20 1 14 7 14"></polyline><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg>
+          </button>
+        </div>
+
+        <div id="history-items-list" class="cards-list">
+          <div class="empty-placeholder">
+            <p>Пока нет скачанных треков</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================= TAB 4: НАСТРОЙКИ (SETTINGS) ================= -->
+      <section id="tab-settings" class="screen-tab">
+        
+        <!-- Accent Color Picker (Horizontal Scroll + Rainbow Color Wheel) -->
+        <div class="liquid-card settings-card">
+          <div class="settings-title-row">
+            <div>
+              <h4 class="settings-group-title">Цвет акцента (Liquid Aura)</h4>
+              <p class="settings-group-desc">Листайте цвета вбок или настройте свой оттенок</p>
+            </div>
+          </div>
+          
+          <div class="accent-palette-scroll" id="accent-palette-scroll">
+            <button class="palette-swatch active" data-color="#FFCC00" style="--swatch-color: #FFCC00;" title="Яндекс Золото">
+              <span class="swatch-check">✓</span>
+            </button>
+            <button class="palette-swatch" data-color="#FF5500" style="--swatch-color: #FF5500;" title="Неоновый Огонь">
+              <span class="swatch-check">✓</span>
+            </button>
+            <button class="palette-swatch" data-color="#FF2D55" style="--swatch-color: #FF2D55;" title="Рубиновый Неон">
+              <span class="swatch-check">✓</span>
+            </button>
+            <button class="palette-swatch" data-color="#FF2E93" style="--swatch-color: #FF2E93;" title="Радиант Роуз">
+              <span class="swatch-check">✓</span>
+            </button>
+            <button class="palette-swatch" data-color="#B026FF" style="--swatch-color: #B026FF;" title="Синтвейв Пурпур">
+              <span class="swatch-check">✓</span>
+            </button>
+            <button class="palette-swatch" data-color="#6366F1" style="--swatch-color: #6366F1;" title="Электрик Индиго">
+              <span class="swatch-check">✓</span>
+            </button>
+            <button class="palette-swatch" data-color="#00A3FF" style="--swatch-color: #00A3FF;" title="Кибер Сапфир">
+              <span class="swatch-check">✓</span>
+            </button>
+            <button class="palette-swatch" data-color="#00E5FF" style="--swatch-color: #00E5FF;" title="Лазурный Неон">
+              <span class="swatch-check">✓</span>
+            </button>
+            <button class="palette-swatch" data-color="#00E575" style="--swatch-color: #00E575;" title="Изумрудный Неон">
+              <span class="swatch-check">✓</span>
+            </button>
+            <button class="palette-swatch" data-color="#A3E635" style="--swatch-color: #A3E635;" title="Лайм Драйв">
+              <span class="swatch-check">✓</span>
+            </button>
+            <button class="palette-swatch" data-color="#E2E8F0" style="--swatch-color: #E2E8F0;" title="Ледяная Платина">
+              <span class="swatch-check">✓</span>
+            </button>
+
+            <!-- Custom Color Picker Swatch -->
+            <button type="button" class="palette-swatch rainbow-swatch" id="btn-rainbow-picker" title="Выбрать свой цвет на спектре">
+              <svg class="rainbow-svg-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="10"></circle>
+                <circle cx="12" cy="12" r="4"></circle>
+                <line x1="12" y1="2" x2="12" y2="8"></line>
+                <line x1="12" y1="16" x2="12" y2="22"></line>
+                <line x1="2" y1="12" x2="8" y2="12"></line>
+                <line x1="16" y1="12" x2="22" y2="12"></line>
+              </svg>
+            </button>
+            <input type="color" id="custom-color-picker" class="hidden-color-input" value="#FFCC00">
+          </div>
+        </div>
+
+        <!-- Auth & Token Card -->
+        <div class="liquid-card settings-card">
+          <h4 class="settings-group-title">Авторизация Яндекс Музыки</h4>
+          <div class="account-status-row">
+            <div class="account-avatar-wrap">
+              <img src="assets/icon.png" alt="Avatar" class="account-avatar">
+            </div>
+            <div class="account-info">
+              <span class="account-name" id="settings-account-name">Проверка токена...</span>
+              <span class="account-sub" id="settings-account-sub">Статус подписки</span>
+            </div>
+          </div>
+          <div class="actions-stack auth-actions">
+            <button class="liquid-button btn-glass-sm" id="btn-open-device-auth">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="2" width="14" height="20" rx="2" ry="2"></rect><line x1="12" y1="18" x2="12.01" y2="18"></line></svg>
+              Войти через ya.ru/device (Код)
+            </button>
+            <button class="liquid-button btn-glass-sm" id="btn-open-manual-auth">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 2l-2 2m-1.5 1.5L16 7l-1.5-1.5L13 7l1.5 1.5L13 10l-1.5-1.5L10 10l1.5 1.5L9 14l-4 4v4h4l4-4 2.5-2.5"></path><circle cx="7.5" cy="7.5" r="2.5"></circle></svg>
+              Ввести токен вручную
+            </button>
+            <button class="liquid-button btn-glass-sm hidden" id="btn-auth-logout" style="color: #ff453a;">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg>
+              Выйти из аккаунта
+            </button>
+          </div>
+        </div>
+
+        <!-- System & Storage Card -->
+        <div class="liquid-card settings-card">
+          <h4 class="settings-group-title">Папка сохранения и система</h4>
+          <div class="settings-row">
+            <span class="setting-label">Путь к файлам:</span>
+            <span class="setting-val" id="settings-storage-path">Downloads/YaSave</span>
+          </div>
+          <button class="liquid-button btn-glass-sm" id="btn-open-storage-folder">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>
+            Открыть папку с треками
+          </button>
+        </div>
+
+        <!-- About Card -->
+        <div class="liquid-card settings-card about-card">
+          <div class="about-header">
+            <img src="assets/icon.png" alt="YaSave" class="about-icon">
+            <div>
+              <span class="about-title">YaSave v2.0 Liquid Glass</span>
+              <span class="about-sub">Поддержка Android APK & Windows Desktop</span>
+            </div>
+          </div>
+          <p class="about-text">
+            Скачивание музыки с сохранением оригинальных обложек в 1000x1000, тегов ID3v2 и альтернативных версий без цензуры.
+          </p>
+        </div>
+
+      </section>
+
+    </main>
+
+    <!-- Floating Liquid Glass Bottom Navigation Bar (No Buggy Oval) -->
+    <nav class="liquid-nav-bar">
+      <button class="nav-item active" data-tab="tab-download">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+        <span>Скачать</span>
+      </button>
+
+      <button class="nav-item" data-tab="tab-uncensored">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path></svg>
+        <span>Без цензуры</span>
+      </button>
+
+      <button class="nav-item" data-tab="tab-history">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>
+        <span>История</span>
+      </button>
+
+      <button class="nav-item" data-tab="tab-settings">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+        <span>Настройки</span>
+      </button>
+    </nav>
+
+  </div>
+
+  <!-- ================= MODALS ================= -->
+
+  <!-- Modal: Device Code OAuth Flow -->
+  <div id="modal-device-auth" class="modal-overlay">
+    <div class="liquid-card modal-card">
+      <div class="modal-header">
+        <h3 class="modal-title">Вход через ya.ru/device</h3>
+        <button class="modal-close-btn" data-close-modal="modal-device-auth">&times;</button>
+      </div>
+      <p class="modal-instruction">
+        1. Откройте в браузере сайт <strong>ya.ru/device</strong><br>
+        2. Введите указанный код подтверждения:
+      </p>
+
+      <div class="user-code-display" id="device-code-display">
+        <span class="code-text" id="device-code-val">------</span>
+        <button class="code-copy-btn" id="btn-copy-device-code" title="Скопировать код">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+        </button>
+      </div>
+
+      <div class="poll-status-indicator">
+        <div class="pulsing-spinner"></div>
+        <span id="device-poll-status">Ожидание подтверждения...</span>
+      </div>
+
+      <div class="modal-actions-row">
+        <a href="https://ya.ru/device" target="_blank" rel="noopener" class="liquid-button btn-glow-primary modal-action-btn" id="btn-open-browser-device">
+          Открыть ya.ru/device
+        </a>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: Manual Token Entry -->
+  <div id="modal-manual-auth" class="modal-overlay">
+    <div class="liquid-card modal-card">
+      <div class="modal-header">
+        <h3 class="modal-title">Ручной ввод токена</h3>
+        <button class="modal-close-btn" data-close-modal="modal-manual-auth">&times;</button>
+      </div>
+      <p class="modal-instruction">
+        Вставьте ваш OAuth токен Яндекс Музыки (начинается с <code>y0_...</code> или <code>AQAAAA...</code>):
+      </p>
+
+      <div class="input-group">
+        <input type="text" id="manual-token-input" placeholder="y0_AgAAAA..." autocomplete="off">
+      </div>
+
+      <div class="modal-actions-row">
+        <button class="liquid-button btn-glow-primary modal-action-btn" id="btn-submit-manual-token">
+          Проверить и сохранить
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast Notification Container -->
+  <div id="toast-container" class="toast-container"></div>
+
+  <!-- Hidden Audio Preview Player -->
+  <audio id="global-preview-player" preload="none"></audio>
+
+  <script src="js/app.js"></script>
+</body>
+</html>

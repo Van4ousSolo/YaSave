@@ -1,0 +1,28 @@
+# Python virtual environments & bytecode
+.venv/
+venv/
+env/
+ENV/
+__pycache__/
+*.py[cod]
+*$py.class
+
+# User credentials & session configs (NEVER push tokens to GitHub)
+yasave_config.json
+
+# Buildozer Android build artifacts & SDK/NDK cache
+.buildozer/
+bin/
+*.apk
+*.aab
+
+# Desktop build artifacts (PyInstaller)
+build/
+dist/
+*.spec.bak
+
+# IDE & OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

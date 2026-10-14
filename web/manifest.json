@@ -1,0 +1,17 @@
+{
+  "name": "YaSave — Yandex Music Downloader",
+  "short_name": "YaSave",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#070a12",
+  "theme_color": "#070a12",
+  "orientation": "portrait",
+  "icons": [
+    {
+      "src": "assets/icon.png",
+      "sizes": "1024x1024",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
