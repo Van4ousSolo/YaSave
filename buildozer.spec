@@ -23,7 +23,7 @@ version = 2.0.0
 
 # (list) Application requirements
 # comma separated e.g. requirements = sqlite3,kivy
-requirements = python3,android,bottle,requests,urllib3,certifi,mutagen,yt-dlp,pillow,charset-normalizer,idna,yandex-music
+requirements = python3,bottle,requests,urllib3,certifi,mutagen,yt-dlp,pillow,charset-normalizer,idna,yandex-music
 
 # (str) p4a bootstrap: webview provides native Android WebView container for modern liquid glass
 p4a.bootstrap = webview

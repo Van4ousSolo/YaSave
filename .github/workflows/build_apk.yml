@@ -51,7 +51,7 @@ jobs:
 
       - name: Build APK with Buildozer
         run: |
-          buildozer -v android debug
+          buildozer -v android debug || { echo "=== BUILDOZER LOG DUMP ==="; tail -n 200 .buildozer/buildozer.log 2>/dev/null; exit 1; }
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
