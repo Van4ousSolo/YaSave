@@ -9,7 +9,7 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
 
     steps:
       - name: Checkout code
@@ -34,7 +34,9 @@ jobs:
             git \
             ccache \
             autoconf \
+            automake \
             libtool \
+            libltdl-dev \
             pkg-config \
             cmake \
             libffi-dev \
@@ -47,7 +49,7 @@ jobs:
       - name: Install Buildozer and Cython
         run: |
           pip install --upgrade pip
-          pip install "buildozer>=1.5.0" cython virtualenv
+          pip install "buildozer>=1.5.0" "cython<3.0" virtualenv
 
       - name: Build APK with Buildozer
         run: |

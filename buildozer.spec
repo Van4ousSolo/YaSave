@@ -22,8 +22,13 @@ source.include_exts = py,png,jpg,kv,atlas,json,html,css,js,svg,ttf,woff,woff2
 version = 2.0.0
 
 # (list) Application requirements
-# comma separated e.g. requirements = sqlite3,kivy
-requirements = python3,bottle,requests,urllib3,certifi,mutagen,yt-dlp,pillow,charset-normalizer,idna,yandex-music
+# Fully expanded dependency graph with all sub-dependencies:
+# - Web framework: bottle
+# - HTTP & Yandex Auth: requests, urllib3, certifi, charset-normalizer, idna, PySocks, typing_extensions
+# - API & Music: yandex-music
+# - Metadata & Cover Art: mutagen, pillow
+# - Uncensored / Audio engine: yt-dlp
+requirements = python3,bottle,requests,urllib3,certifi,charset-normalizer,idna,PySocks,typing_extensions,yandex-music,mutagen,pillow,yt-dlp
 
 # (str) p4a bootstrap: webview provides native Android WebView container for modern liquid glass
 p4a.bootstrap = webview
