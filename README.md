@@ -1,4 +1,4 @@
-# 🏴‍☠️ YaSave — Liquid Glass Yandex Music Downloader
+# 🏴‍☠️ YaSave — Yandex Music Downloader
 
 ![YaSave Cover](assets/cover.jpg)
 
