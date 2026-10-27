@@ -16,6 +16,7 @@ from core.storage import get_download_directory, sanitize_filename
 from core.auth import AuthManager
 from core.yandex_api import YandexParser, YandexDownloader
 from core.alt_sources import AlternativeSourcesManager
+from core.player import PlayerController, safe_audio_path, extract_cover
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +43,8 @@ download_state: Dict[str, Any] = {
     "status": "Готов",
     "error": None,
     "filepath": None,
-    "complete": False
+    "complete": False,
+    "quality": None
 }
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -60,6 +62,7 @@ def reset_download_state():
         download_state["error"] = None
         download_state["filepath"] = None
         download_state["complete"] = False
+        download_state["quality"] = None
 
 # Static files
 @app.route('/')
@@ -185,6 +188,12 @@ def api_track_info():
         info = downloader.get_track_info(track_id)
         # remove un-serializable raw_track
         info_cleaned = {k: v for k, v in info.items() if k != "raw_track"}
+        # Real stream quality for the card badge (never blocks the card on errors)
+        try:
+            info_cleaned["quality"] = downloader.probe_quality(track_id)
+        except Exception as qe:
+            logger.warning(f"quality probe failed: {qe}")
+            info_cleaned["quality"] = None
         return {"track": info_cleaned}
     except Exception as e:
         response.status = 500
@@ -219,19 +228,23 @@ def api_download_ym():
             with download_lock:
                 download_state["status"] = status_text
 
+        def on_quality(q):
+            with download_lock:
+                download_state["quality"] = q
+
         try:
             downloader = YandexDownloader()
             filepath = downloader.download_track(
                 track_info=track_info,
                 on_progress=on_progress,
-                on_status=on_status
+                on_status=on_status,
+                on_quality=on_quality
             )
             with download_lock:
                 download_state["filepath"] = filepath
                 download_state["complete"] = True
                 download_state["is_downloading"] = False
                 download_state["percent"] = 100.0
-                download_state["status"] = "Успешно сохранено!"
         except Exception as e:
             with download_lock:
                 download_state["error"] = str(e)
@@ -294,6 +307,60 @@ def api_get_preview():
     except Exception as e:
         response.status = 500
         return {"error": str(e)}
+
+# --- PLAYER (native Android service or in-app <audio>) ---
+
+def _player_call(fn):
+    try:
+        return fn()
+    except (ValueError, IndexError) as e:
+        response.status = 400
+        return {"error": str(e)}
+    except Exception as e:
+        logger.exception("player error")
+        response.status = 500
+        return {"error": str(e)}
+
+@app.route('/api/player/play', method='POST')
+def api_player_play():
+    data = request.json or {}
+    return _player_call(lambda: PlayerController.get().play_queue(data.get("items") or [], data.get("index") or 0))
+
+@app.route('/api/player/step', method='POST')
+def api_player_step():
+    data = request.json or {}
+    return _player_call(lambda: PlayerController.get().step(int(data.get("dir") or 1), bool(data.get("auto"))))
+
+@app.route('/api/player/command', method='POST')
+def api_player_command():
+    data = request.json or {}
+    return _player_call(lambda: PlayerController.get().command(str(data.get("cmd") or ""), int(data.get("position_ms") or 0)))
+
+@app.route('/api/player/state', method='GET')
+def api_player_state():
+    return _player_call(lambda: PlayerController.get().state())
+
+@app.route('/api/player/file', method='GET')
+def api_player_file():
+    path = safe_audio_path(request.query.getunicode("file", "") or "")
+    if not path:
+        response.status = 404
+        return {"error": "Файл не найден"}
+    return static_file(os.path.basename(path), root=os.path.dirname(path))
+
+@app.route('/api/player/art', method='GET')
+def api_player_art():
+    path = safe_audio_path(request.query.getunicode("file", "") or "")
+    cover = extract_cover(path) if path else None
+    if not cover:
+        response.status = 404
+        return {"error": "Нет обложки"}
+    return static_file(os.path.basename(cover), root=os.path.dirname(cover), mimetype="image/jpeg")
+
+@app.route('/api/diagnostics', method='GET')
+def api_diagnostics():
+    from core.alt_sources import run_diagnostics
+    return _player_call(run_diagnostics)
 
 @app.route('/api/spotify_credentials', method='POST')
 def api_spotify_credentials():
@@ -506,6 +573,8 @@ def api_open_folder():
         return {"error": str(e)}
 
 def start_server(host='127.0.0.1', port=58231):
+    # Android: start the playback service early so the first play is instant
+    threading.Timer(4.0, PlayerController.get().prewarm).start()
     adapter = ThreadedWSGIAdapter(host=host, port=port)
     run(app, server=adapter, quiet=True)
 

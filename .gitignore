@@ -31,3 +31,6 @@ Thumbs.db
 *.keystore
 *.jks
 *.keystore.b64
+
+# Local runtime cache (yt-dlp, covers)
+cache/

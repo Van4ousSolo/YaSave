@@ -7,14 +7,14 @@ import logging
 import threading
 import unicodedata
 from difflib import SequenceMatcher
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FuturesTimeout
 from typing import List, Dict, Any, Optional, Callable, Tuple
 
 import requests
 import yt_dlp
 
 from .config import ConfigManager
-from .storage import get_download_directory, sanitize_filename
+from .storage import get_download_directory, sanitize_filename, get_cache_dir
 from .metadata import embed_metadata, fetch_cover_bytes
 
 logger = logging.getLogger(__name__)
@@ -469,14 +469,78 @@ def catalog_fallback_search(query: str, limit: int = SP_LIMIT) -> List[Dict[str,
 # yt-dlp based sources
 # ---------------------------------------------------------------------------
 
-def _ydl_flat_search(search_term: str) -> List[Dict[str, Any]]:
-    opts = {
+DESKTOP_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+              "(KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36")
+
+
+def short_reason(exc: BaseException) -> str:
+    """Human-readable one-line reason for a failed source (shown in the UI)."""
+    msg = str(exc) or type(exc).__name__
+    low = msg.lower()
+    if "sign in to confirm" in low or "not a bot" in low:
+        return "YouTube требует подтвердить, что вы не бот"
+    if "451" in low or "legal reasons" in low:
+        return "недоступно в регионе (451)"
+    if "429" in low or "too many requests" in low:
+        return "лимит запросов (429)"
+    if "403" in low or "forbidden" in low:
+        return "доступ запрещён (403)"
+    if any(k in low for k in ("getaddrinfo", "name or service not known", "failed to resolve",
+                              "no address associated", "nodename nor servname", "temporary failure in name")):
+        return "нет доступа к сервису (DNS)"
+    if any(k in low for k in ("timed out", "timeout")):
+        return "таймаут: сервис не отвечает из этой сети"
+    if any(k in low for k in ("connection refused", "connection reset", "remote end closed", "network is unreachable",
+                              "connection aborted", "max retries", "remotedisconnected", "connectionerror")):
+        return "соединение сброшено (возможна блокировка сети)"
+    if "certificate" in low or "ssl" in low:
+        return "ошибка SSL-сертификата"
+    if "client_id" in low or "client id" in low:
+        return "не удалось получить client_id"
+    if re.search(r"[а-яё]", msg, re.I):
+        return msg.splitlines()[0][:140]
+    first = msg.splitlines()[0]
+    first = re.sub(r"^ERROR:\s*(\[[^\]]+\]\s*)?", "", first)
+    return first[:120]
+
+
+class _YdlLogger:
+    """Collects yt-dlp warnings / errors so a failing source can tell why."""
+
+    def __init__(self):
+        self.messages: List[str] = []
+
+    def debug(self, msg):
+        pass
+
+    def info(self, msg):
+        pass
+
+    def warning(self, msg):
+        logger.warning(f"yt-dlp: {msg}")
+        self.messages.append(str(msg))
+
+    def error(self, msg):
+        logger.error(f"yt-dlp: {msg}")
+        self.messages.append(str(msg))
+
+
+def ydl_base_opts(**extra) -> Dict[str, Any]:
+    opts: Dict[str, Any] = {
         "quiet": True,
-        "no_warnings": True,
-        "extract_flat": True,
-        "skip_download": True,
-        "socket_timeout": 12,
+        "noprogress": True,
+        "socket_timeout": 15,
+        # Writable cache for SoundCloud client_id and YouTube player data: the default
+        # ~/.cache may not be writable inside the Android app.
+        "cachedir": get_cache_dir("yt-dlp"),
+        "logger": _YdlLogger(),
     }
+    opts.update(extra)
+    return opts
+
+
+def _ydl_flat_search(search_term: str) -> List[Dict[str, Any]]:
+    opts = ydl_base_opts(extract_flat=True, skip_download=True)
     with yt_dlp.YoutubeDL(opts) as ydl:
         result = ydl.extract_info(search_term, download=False) or {}
     return [e for e in (result.get("entries") or []) if e]
@@ -491,16 +555,21 @@ def _split_artist_title(raw_title: str, fallback_artist: str) -> Tuple[str, str]
 
 
 def _search_youtube(query: str) -> List[Dict[str, Any]]:
+    """Two parallel searches (plain + 'uncensored'). Raises if both fail."""
     # Uncensored suffix in the query's language (English suffix on a Cyrillic query returns nothing)
     suffix = "без цензуры" if re.search(r"[а-яё]", query, re.I) else "uncensored explicit"
     terms = [f"ytsearch{YT_LIMIT}:{query}", f"ytsearch{YT_UNCENSORED_LIMIT}:{query} {suffix}"]
     entries: List[Dict[str, Any]] = []
+    errors: List[BaseException] = []
     with ThreadPoolExecutor(max_workers=2) as pool:
         for fut in [pool.submit(_ydl_flat_search, t) for t in terms]:
             try:
                 entries.extend(fut.result())
             except Exception as e:
                 logger.error(f"YouTube search error: {e}")
+                errors.append(e)
+    if errors and len(errors) == len(terms):
+        raise errors[0]
 
     out = []
     for e in entries:
@@ -527,7 +596,109 @@ def _search_youtube(query: str) -> List[Dict[str, Any]]:
     return out
 
 
-def _search_soundcloud(query: str) -> List[Dict[str, Any]]:
+# ---------------------------------------------------------------------------
+# SoundCloud: public API v2 with an automatically scraped client_id,
+# yt-dlp scsearch as a fallback.
+# ---------------------------------------------------------------------------
+
+class SoundCloudAPI:
+    CLIENT_ID_TTL = 7 * 86400
+    _client_id: Optional[str] = None
+    _lock = threading.Lock()
+
+    @staticmethod
+    def _scrape_client_id() -> str:
+        # Desktop UA matters: with a mobile UA soundcloud.com serves the mobile site without client_id
+        headers = {"User-Agent": DESKTOP_UA}
+        html = requests.get("https://soundcloud.com/", headers=headers, timeout=12).text
+        scripts = re.findall(r'<script[^>]+src="(https://[^"]+\.js)"', html)
+        for src in reversed(scripts):
+            try:
+                js = requests.get(src, headers=headers, timeout=12).text
+            except requests.RequestException:
+                continue
+            m = re.search(r'client_id\s*:\s*"([0-9a-zA-Z]{32})"', js) or re.search(r'client_id=([0-9a-zA-Z]{32})', js)
+            if m:
+                return m.group(1)
+        raise RuntimeError("SoundCloud: client_id не найден на странице")
+
+    @classmethod
+    def client_id(cls, refresh: bool = False) -> str:
+        with cls._lock:
+            cfg = ConfigManager.get_instance()
+            if not refresh:
+                if cls._client_id:
+                    return cls._client_id
+                cached = cfg.data.get("soundcloud_client_id")
+                if cached and time.time() - float(cfg.data.get("soundcloud_client_id_ts") or 0) < cls.CLIENT_ID_TTL:
+                    cls._client_id = cached
+                    return cached
+            cid = cls._scrape_client_id()
+            cls._client_id = cid
+            cfg.data["soundcloud_client_id"] = cid
+            cfg.data["soundcloud_client_id_ts"] = time.time()
+            try:
+                cfg.save()
+            except Exception as e:
+                logger.warning(f"Can't persist SoundCloud client_id: {e}")
+            # Share it with yt-dlp, which needs it for preview / download
+            try:
+                with yt_dlp.YoutubeDL(ydl_base_opts()) as ydl:
+                    ydl.cache.store("soundcloud", "client_id", cid)
+            except Exception as e:
+                logger.debug(f"yt-dlp cache store failed: {e}")
+            logger.info("SoundCloud client_id refreshed")
+            return cid
+
+    @classmethod
+    def search(cls, query: str, limit: int = SC_LIMIT) -> List[Dict[str, Any]]:
+        for attempt in range(2):
+            cid = cls.client_id(refresh=attempt > 0)
+            resp = requests.get(
+                "https://api-v2.soundcloud.com/search/tracks",
+                params={"q": query, "client_id": cid, "limit": limit, "app_locale": "en"},
+                headers={"User-Agent": DESKTOP_UA},
+                timeout=12,
+            )
+            if resp.status_code in (401, 403) and attempt == 0:
+                continue  # client_id rotated
+            resp.raise_for_status()
+            return [c for c in (cls._to_candidate(t) for t in resp.json().get("collection") or []) if c]
+        raise RuntimeError("SoundCloud отклоняет client_id")
+
+    @staticmethod
+    def _to_candidate(t: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        if t.get("kind") not in (None, "track") or t.get("policy") == "BLOCK":
+            return None
+        # DRM-only tracks (encrypted HLS) can be neither played nor downloaded
+        protocols = {((x.get("format") or {}).get("protocol") or "")
+                     for x in ((t.get("media") or {}).get("transcodings") or [])}
+        if protocols and all("encrypted" in p for p in protocols):
+            return None
+        url = t.get("permalink_url")
+        if not url:
+            return None
+        user = t.get("user") or {}
+        meta = t.get("publisher_metadata") or {}
+        artist = meta.get("artist") or user.get("username") or "SoundCloud"
+        dur = int((t.get("duration") or 0) // 1000)  # 30 s for SNIP (preview-only) tracks
+        art = t.get("artwork_url") or user.get("avatar_url") or ""
+        return {
+            "id": f"sc_{t.get('id')}",
+            "title": t.get("title") or "SoundCloud Track",
+            "artist": artist,
+            "channel": user.get("username") or artist,
+            "duration": dur,
+            "duration_str": _fmt_duration(dur),
+            "url": url,
+            "source": "SoundCloud",
+            "is_explicit": bool(meta.get("explicit")),
+            "thumbnail": art.replace("-large.", "-t300x300.") if art else None,
+            "cover_url": art.replace("-large.", "-t500x500.") if art else None,
+        }
+
+
+def _search_soundcloud_ytdlp(query: str) -> List[Dict[str, Any]]:
     out = []
     for e in _ydl_flat_search(f"scsearch{SC_LIMIT}:{query}"):
         url = e.get("webpage_url") or e.get("url")
@@ -548,6 +719,17 @@ def _search_soundcloud(query: str) -> List[Dict[str, Any]]:
             "thumbnail": e.get("thumbnail"),
         })
     return out
+
+
+def _search_soundcloud(query: str) -> List[Dict[str, Any]]:
+    try:
+        return SoundCloudAPI.search(query)
+    except Exception as api_err:
+        logger.warning(f"SoundCloud API failed, trying yt-dlp: {api_err}")
+        try:
+            return _search_soundcloud_ytdlp(query)
+        except Exception as ydl_err:
+            raise RuntimeError(f"{short_reason(api_err)}; yt-dlp: {short_reason(ydl_err)}") from ydl_err
 
 
 def _search_yandex(query: str) -> List[Dict[str, Any]]:
@@ -687,14 +869,17 @@ class AlternativeSourcesManager:
 
         results: List[Dict[str, Any]] = []
         status: Dict[str, Any] = {}
-        with ThreadPoolExecutor(max_workers=len(selected)) as pool:
-            futures = {pool.submit(SOURCE_FUNCS[s], query if s == "spotify" else search_query): s for s in selected}
-            for fut in as_completed(futures):
+        # Every source reports a status: ok / empty / error with a short reason.
+        # A slow or failing source never blocks or breaks the others.
+        pool = ThreadPoolExecutor(max_workers=len(selected))
+        futures = {pool.submit(SOURCE_FUNCS[s], query if s == "spotify" else search_query): s for s in selected}
+        try:
+            for fut in as_completed(futures, timeout=SOURCE_TIMEOUT):
                 name = futures[fut]
                 try:
-                    items = fut.result(timeout=SOURCE_TIMEOUT)
+                    items = fut.result()
                     results.extend(items)
-                    status[name] = {"count": len(items)}
+                    status[name] = {"status": "ok" if items else "empty", "count": len(items)}
                     # Spotify answered with fallback metadata (Deezer / iTunes)
                     if name == "spotify":
                         fb = next((c["meta_source"] for c in items if c.get("meta_source") not in (None, "Spotify")), None)
@@ -703,7 +888,14 @@ class AlternativeSourcesManager:
                             status[name]["reason"] = SpotifyClient.last_error
                 except Exception as e:
                     logger.error(f"Search error in {name}: {e}")
-                    status[name] = {"error": str(e)}
+                    status[name] = {"status": "error", "count": 0, "error": short_reason(e), "detail": str(e)[:400]}
+        except FuturesTimeout:
+            for fut, name in futures.items():
+                if name not in status:
+                    fut.cancel()
+                    status[name] = {"status": "error", "count": 0, "error": f"таймаут ({SOURCE_TIMEOUT} с)"}
+        finally:
+            pool.shutdown(wait=False, cancel_futures=True)
 
         # Dedupe by id; catalog entries also by artist + title + duration
         # (Deezer / iTunes often list the same recording on several albums)
@@ -741,7 +933,10 @@ class AlternativeSourcesManager:
         if cached is not None:
             return dict(cached)
         query = f"{artist} {title}".strip()
-        cands = _search_youtube(query)
+        try:
+            cands = _search_youtube(query)
+        except Exception as e:
+            raise RuntimeError(f"YouTube недоступен для подбора аудио: {short_reason(e)}") from e
         if not cands:
             return None
         for c in cands:
@@ -777,16 +972,14 @@ class AlternativeSourcesManager:
             return YandexDownloader().get_stream_url(str(candidate["ym_id"]), preview=True)
 
         page_url = AlternativeSourcesManager.resolve_audio_page(candidate)
-        ydl_opts = {
-            "format": "bestaudio[ext=m4a]/bestaudio[ext=mp3]/bestaudio/best",
-            "quiet": True,
-            "skip_download": True,
-            "no_warnings": True,
-            "socket_timeout": 12,
-        }
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(page_url, download=False)
-            return info.get("url")
+        # m4a / mp3 first: both play in Android MediaPlayer and in the WebView
+        ydl_opts = ydl_base_opts(format="bestaudio[ext=m4a]/bestaudio[ext=mp3]/bestaudio/best", skip_download=True)
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(page_url, download=False)
+        except Exception as e:
+            raise RuntimeError(f"Не удалось получить поток: {short_reason(e)}") from e
+        return info.get("url")
 
     @staticmethod
     def _metadata_for(candidate: Dict[str, Any], ym_track_info: Optional[Dict[str, Any]]) -> Dict[str, Any]:
@@ -853,13 +1046,11 @@ class AlternativeSourcesManager:
             elif d["status"] == "finished" and on_progress:
                 on_progress(100.0, 0, 0, "")
 
-        ydl_opts = {
-            "format": "bestaudio[ext=mp3]/bestaudio/best",
-            "outtmpl": temp_out,
-            "quiet": True,
-            "no_warnings": True,
-            "progress_hooks": [progress_hook],
-        }
+        ydl_opts = ydl_base_opts(
+            format="bestaudio[ext=mp3]/bestaudio/best",
+            outtmpl=temp_out,
+            progress_hooks=[progress_hook],
+        )
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download([download_url])
 
@@ -889,3 +1080,100 @@ class AlternativeSourcesManager:
         if on_status:
             on_status("Трек успешно скачан!")
         return out_path
+
+
+# ---------------------------------------------------------------------------
+# Diagnostics (Settings -> "Диагностика источников")
+# ---------------------------------------------------------------------------
+
+DIAG_ENDPOINTS = [
+    ("YouTube", "https://www.youtube.com/robots.txt"),
+    ("YouTube API", "https://youtubei.googleapis.com/generate_204"),
+    ("SoundCloud", "https://soundcloud.com/robots.txt"),
+    ("SoundCloud API", "https://api-v2.soundcloud.com/"),
+    ("Яндекс Музыка API", "https://api.music.yandex.net/"),
+    ("Spotify", "https://accounts.spotify.com/"),
+    ("Deezer", "https://api.deezer.com/"),
+    ("iTunes", "https://itunes.apple.com/"),
+]
+
+
+def _timed(fn) -> Dict[str, Any]:
+    t = time.time()
+    try:
+        detail = fn()
+        return {"ok": True, "ms": int((time.time() - t) * 1000), "detail": detail}
+    except Exception as e:
+        return {"ok": False, "ms": int((time.time() - t) * 1000), "error": short_reason(e), "detail": str(e)[:300]}
+
+
+def _probe_url(url: str) -> str:
+    resp = requests.get(url, headers={"User-Agent": DESKTOP_UA}, timeout=8, stream=True)
+    resp.close()
+    return f"HTTP {resp.status_code}"  # any HTTP answer means the host is reachable
+
+
+def _probe_youtube_search() -> str:
+    entries = _ydl_flat_search("ytsearch2:Eminem Without Me")
+    if not entries:
+        raise RuntimeError("пустой ответ поиска")
+    return f"{len(entries)} рез."
+
+
+def _probe_youtube_stream() -> str:
+    with yt_dlp.YoutubeDL(ydl_base_opts(format="bestaudio[ext=m4a]/bestaudio/best", skip_download=True)) as ydl:
+        info = ydl.extract_info("https://www.youtube.com/watch?v=YVkUvmDQ3HY", download=False)
+    if not info.get("url"):
+        raise RuntimeError("нет ссылки на аудиопоток")
+    return f"{info.get('ext')} {int(info.get('abr') or 0)} kbps"
+
+
+def _probe_soundcloud() -> str:
+    items = SoundCloudAPI.search("Eminem Without Me", limit=2)
+    return f"{len(items)} рез., client_id ok"
+
+
+def run_diagnostics() -> Dict[str, Any]:
+    import platform
+    import sys
+    cache = get_cache_dir("yt-dlp")
+    writable = False
+    try:
+        probe = os.path.join(cache, ".write_test")
+        with open(probe, "w") as f:
+            f.write("ok")
+        os.remove(probe)
+        writable = True
+    except Exception:
+        pass
+
+    tasks = {f"net:{name}": (lambda u=url: _probe_url(u)) for name, url in DIAG_ENDPOINTS}
+    tasks["YouTube: поиск"] = _probe_youtube_search
+    tasks["YouTube: аудиопоток"] = _probe_youtube_stream
+    tasks["SoundCloud: поиск API"] = _probe_soundcloud
+
+    results: Dict[str, Any] = {}
+    pool = ThreadPoolExecutor(max_workers=len(tasks))
+    futures = {pool.submit(_timed, fn): name for name, fn in tasks.items()}
+    try:
+        for fut in as_completed(futures, timeout=40):
+            results[futures[fut]] = fut.result()
+    except FuturesTimeout:
+        for name in tasks:
+            results.setdefault(name, {"ok": False, "error": "таймаут проверки"})
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)
+
+    network = [{"name": n, **results.get(f"net:{n}", {})} for n, _ in DIAG_ENDPOINTS]
+    functional = [{"name": n, **results.get(n, {})} for n in ("YouTube: поиск", "YouTube: аудиопоток", "SoundCloud: поиск API")]
+    return {
+        "env": {
+            "python": sys.version.split()[0],
+            "yt_dlp": yt_dlp.version.__version__,
+            "platform": platform.platform(terse=True),
+            "cache_dir": cache,
+            "cache_writable": writable,
+        },
+        "network": network,
+        "functional": functional,
+    }

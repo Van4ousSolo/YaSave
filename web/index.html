@@ -52,7 +52,8 @@
     <div class="aura-orb orb-1"></div>
     <div class="aura-orb orb-2"></div>
     <div class="aura-orb orb-3"></div>
-    <div class="glass-noise-overlay"></div>
+    <div class="aura-orb orb-4"></div>
+    <div class="aura-vignette"></div>
   </div>
 
   <!-- Single splash screen. Visually identical to android/_load.html so the
@@ -155,7 +156,7 @@
           
           <div class="track-details">
             <div class="track-badges-row">
-              <span class="badge badge-bitrate" id="badge-bitrate">320 kbps HQ</span>
+              <span class="badge badge-bitrate hidden" id="badge-bitrate">MP3</span>
               <span class="badge badge-explicit hidden" id="badge-explicit">18+ EXPLICIT</span>
             </div>
             <h2 class="track-title" id="track-title">Трек не выбран</h2>
@@ -167,13 +168,14 @@
             </div>
           </div>
         </div>
+        <p id="quality-note" class="quality-note hidden"></p>
 
         <!-- Download Action Buttons -->
         <div class="actions-stack">
           <button class="liquid-button btn-glow-primary" id="btn-download-ym" disabled>
             <div class="btn-shine"></div>
             <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"></path></svg>
-            <span class="btn-text">Скачать из Яндекс Музыки (320 kbps)</span>
+            <span class="btn-text" id="btn-download-ym-text">Скачать из Яндекс Музыки</span>
           </button>
 
           <button class="liquid-button btn-glass-accent" id="btn-find-uncensored" disabled>
@@ -212,6 +214,7 @@
           <div class="success-text-wrap">
             <h4 class="success-title">Трек успешно сохранён!</h4>
             <p class="success-filename" id="success-filename">Song.mp3</p>
+            <p class="success-quality hidden" id="success-quality"></p>
           </div>
           <button class="liquid-button btn-glass-sm" id="btn-open-folder-action">
             <svg class="btn-sm-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>
@@ -229,7 +232,7 @@
           </div>
           <div class="hero-text-wrap">
             <h3 class="hero-title">Поиск версий без цензуры</h3>
-            <p class="hero-desc">Яндекс Музыка, YouTube, SoundCloud и Spotify — единая выдача с ранжированием.</p>
+            <p class="hero-desc">Яндекс Музыка, YouTube, SoundCloud и Spotify в одной выдаче, лучшие совпадения сверху.</p>
           </div>
         </div>
 
@@ -244,7 +247,7 @@
             Яндекс Музыка
           </button>
           <button type="button" class="source-pill" data-source="soundcloud">
-            <svg class="pill-icon icon-sc" viewBox="0 0 24 24" fill="currentColor"><path d="M11.56 8.87V17h1.41V9.56c-.44-.45-.92-.69-1.41-.69zm-2.82 1.63V17h1.41v-6.5zm-2.82 2.45V17h1.41v-4.05zm-2.82 1.63V17h1.41v-2.42zm11.28-7.34C13.88 5.61 13.06 4 11.5 4c-.7 0-1.34.33-1.84.88v3.31c.56-.25 1.18-.39 1.84-.39 1.43 0 2.65 1.05 2.9 2.44zM18 9c-.28 0-.55.03-.82.1.28.53.44 1.13.44 1.77 0 2.05-1.55 3.73-3.53 3.96V17H20c2.21 0 4-1.79 4-4s-1.79-4-4-4z"/></svg>
+            <svg class="pill-icon icon-sc" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 17V9.5"></path><path d="M7 17v-5"></path><path d="M4 17v-2.5"></path><path d="M13 17V8.2a5 5 0 0 1 6.6 3.3A3 3 0 0 1 19 17h-6z"></path></svg>
             SoundCloud
           </button>
           <button type="button" class="source-pill" data-source="spotify">
@@ -420,6 +423,19 @@
           </div>
         </div>
 
+        <!-- Source diagnostics -->
+        <div class="liquid-card settings-card">
+          <div>
+            <h4 class="settings-group-title">Диагностика источников</h4>
+            <p class="settings-group-desc">Проверяет из сети телефона доступ к YouTube, SoundCloud и каталогам: поиск, аудиопоток, время ответа и точную причину ошибки.</p>
+          </div>
+          <button class="liquid-button btn-glass-sm" id="btn-run-diagnostics">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline></svg>
+            <span>Проверить</span>
+          </button>
+          <div id="diagnostics-output" class="diag-output hidden"></div>
+        </div>
+
         <!-- System & Storage Card -->
         <div class="liquid-card settings-card">
           <h4 class="settings-group-title">Папка сохранения и система</h4>
@@ -451,30 +467,85 @@
 
     </main>
 
-    <!-- Floating Liquid Glass Bottom Navigation Bar (No Buggy Oval) -->
-    <nav class="liquid-nav-bar">
-      <button class="nav-item active" data-tab="tab-download">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
-        <span>Скачать</span>
-      </button>
-
-      <button class="nav-item" data-tab="tab-uncensored">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path></svg>
-        <span>Без цензуры</span>
-      </button>
-
-      <button class="nav-item" data-tab="tab-history">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>
-        <span>История</span>
-      </button>
-
-      <button class="nav-item" data-tab="tab-settings">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
-        <span>Настройки</span>
-      </button>
-    </nav>
-
   </div>
+
+
+  <!-- Mini player (above the nav bar) -->
+  <div id="mini-player" class="mini-player glass-float" aria-hidden="true">
+    <button type="button" class="mini-open" id="mini-open" aria-label="Открыть плеер">
+      <img class="mini-cover" id="mini-cover" src="assets/cover.jpg" alt="">
+      <span class="mini-text">
+        <span class="mini-title" id="mini-title">—</span>
+        <span class="mini-artist" id="mini-artist"></span>
+      </span>
+    </button>
+    <button type="button" class="mini-btn" id="mini-toggle" aria-label="Пауза">
+      <span class="mini-btn-icon"></span>
+    </button>
+    <button type="button" class="mini-btn" id="mini-next" aria-label="Следующий трек">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 4 15 12 5 20 5 4"></polygon><line x1="19" y1="5" x2="19" y2="19"></line></svg>
+    </button>
+    <div class="mini-progress"><div class="mini-progress-fill" id="mini-progress-fill"></div></div>
+  </div>
+
+  <!-- Full player sheet -->
+  <div id="player-sheet" class="player-sheet" aria-hidden="true">
+    <div class="player-sheet-backdrop" data-close-player></div>
+    <div class="player-sheet-panel glass-float">
+      <button type="button" class="sheet-grabber" data-close-player aria-label="Свернуть плеер">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+      </button>
+      <div class="sheet-cover-wrap">
+        <div class="sheet-cover-glow"></div>
+        <img class="sheet-cover" id="sheet-cover" src="assets/cover.jpg" alt="">
+      </div>
+      <div class="sheet-meta">
+        <span class="sheet-source badge badge-muted" id="sheet-source"></span>
+        <h3 class="sheet-title" id="sheet-title">—</h3>
+        <p class="sheet-artist" id="sheet-artist"></p>
+      </div>
+      <div class="sheet-seek">
+        <input type="range" id="sheet-seek" min="0" max="1000" value="0" step="1" aria-label="Перемотка">
+        <div class="sheet-times"><span id="sheet-pos">0:00</span><span id="sheet-dur">0:00</span></div>
+      </div>
+      <div class="sheet-controls">
+        <button type="button" class="sheet-btn" id="sheet-prev" aria-label="Предыдущий">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="19 20 9 12 19 4 19 20"></polygon><line x1="5" y1="19" x2="5" y2="5"></line></svg>
+        </button>
+        <button type="button" class="sheet-btn sheet-btn-main" id="sheet-toggle" aria-label="Пауза">
+          <span class="sheet-btn-icon"></span>
+        </button>
+        <button type="button" class="sheet-btn" id="sheet-next" aria-label="Следующий">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 4 15 12 5 20 5 4"></polygon><line x1="19" y1="5" x2="19" y2="19"></line></svg>
+        </button>
+      </div>
+      <p class="sheet-hint" id="sheet-hint"></p>
+    </div>
+  </div>
+
+  <!-- Bottom navigation: outside .app-container so it stays fixed to the viewport -->
+  <nav class="liquid-nav-bar glass-float" id="nav-bar">
+    <span class="nav-indicator" aria-hidden="true"></span>
+    <button class="nav-item active" data-tab="tab-download">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+      <span>Скачать</span>
+    </button>
+
+    <button class="nav-item" data-tab="tab-uncensored">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path></svg>
+      <span>Без цензуры</span>
+    </button>
+
+    <button class="nav-item" data-tab="tab-history">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>
+      <span>История</span>
+    </button>
+
+    <button class="nav-item" data-tab="tab-settings">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+      <span>Настройки</span>
+    </button>
+  </nav>
 
   <!-- ================= MODALS ================= -->
 
@@ -536,7 +607,7 @@
   <!-- Toast Notification Container -->
   <div id="toast-container" class="toast-container"></div>
 
-  <!-- Hidden Audio Preview Player -->
+  <!-- In-app audio (used when the native Android player is not available) -->
   <audio id="global-preview-player" preload="none"></audio>
 
   <script src="js/app.js"></script>

@@ -42,6 +42,16 @@ def get_download_directory() -> str:
     os.makedirs(yasave_dir, exist_ok=True)
     return yasave_dir
 
+def get_cache_dir(sub: str = "") -> str:
+    """Writable private cache folder (next to the config file; app storage on Android)."""
+    from .config import get_config_path
+    path = os.path.join(os.path.dirname(get_config_path()), "cache", sub)
+    try:
+        os.makedirs(path, exist_ok=True)
+    except Exception as e:
+        logger.warning(f"Cache dir {path} unavailable: {e}")
+    return path
+
 def sanitize_filename(name: str) -> str:
     # Remove prohibited filename characters: < > : " / \ | ? *
     clean = re.sub(r'[<>:"/\\|?*]', '_', name)

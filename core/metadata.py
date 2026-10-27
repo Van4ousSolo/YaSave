@@ -100,3 +100,37 @@ def embed_metadata(
     except Exception as e:
         logger.error(f"Error embedding metadata into {filepath}: {e}")
         return False
+
+
+def measure_audio_bitrate(filepath: str) -> dict:
+    """
+    Real bitrate of a downloaded file.
+    MP3: from the frame headers via mutagen (exact for CBR, average for VBR).
+    Other / unreadable files: estimated from size and duration.
+    """
+    result = {"kbps": 0, "mode": "", "codec": "", "method": ""}
+    try:
+        size = os.path.getsize(filepath)
+    except OSError:
+        return result
+    length = 0.0
+    try:
+        from mutagen import File as MutagenFile
+        audio = MutagenFile(filepath)
+        if audio is not None and audio.info:
+            length = float(getattr(audio.info, "length", 0) or 0)
+            bitrate = int(getattr(audio.info, "bitrate", 0) or 0)
+            result["codec"] = type(audio).__name__.lower()
+            mode = getattr(audio.info, "bitrate_mode", None)
+            if mode is not None:
+                result["mode"] = str(mode).split(".")[-1]  # CBR / VBR / ABR / UNKNOWN
+            if bitrate:
+                result["kbps"] = round(bitrate / 1000)
+                result["method"] = "file_header"
+                return result
+    except Exception as e:
+        logger.debug(f"mutagen bitrate read failed for {filepath}: {e}")
+    if length > 0:
+        result["kbps"] = round(size * 8 / length / 1000)
+        result["method"] = "size_estimate"
+    return result

@@ -77,6 +77,39 @@ const dom = {
   sourceFilterPills: $('source-filter-pills'),
   sourcePills: document.querySelectorAll('.source-pill'),
   audioPlayer: $('global-preview-player'),
+  qualityNote: $('quality-note'),
+  badgeBitrate: $('badge-bitrate'),
+  btnDownloadYmText: $('btn-download-ym-text'),
+  successQuality: $('success-quality'),
+
+  // Player
+  navBar: $('nav-bar'),
+  screensViewport: document.querySelector('.screens-viewport'),
+  miniPlayer: $('mini-player'),
+  miniOpen: $('mini-open'),
+  miniCover: $('mini-cover'),
+  miniTitle: $('mini-title'),
+  miniArtist: $('mini-artist'),
+  miniToggle: $('mini-toggle'),
+  miniNext: $('mini-next'),
+  miniProgressFill: $('mini-progress-fill'),
+  playerSheet: $('player-sheet'),
+  sheetPanel: document.querySelector('.player-sheet-panel'),
+  sheetCover: $('sheet-cover'),
+  sheetSource: $('sheet-source'),
+  sheetTitle: $('sheet-title'),
+  sheetArtist: $('sheet-artist'),
+  sheetSeek: $('sheet-seek'),
+  sheetPos: $('sheet-pos'),
+  sheetDur: $('sheet-dur'),
+  sheetPrev: $('sheet-prev'),
+  sheetToggle: $('sheet-toggle'),
+  sheetNext: $('sheet-next'),
+  sheetHint: $('sheet-hint'),
+
+  // Diagnostics
+  btnRunDiagnostics: $('btn-run-diagnostics'),
+  diagOutput: $('diagnostics-output'),
 
   // History
   historyList: $('history-items-list'),
@@ -120,6 +153,8 @@ document.addEventListener('DOMContentLoaded', () => {
   initUncensoredEvents();
   initSettingsEvents();
   initModals();
+  initPlayer();
+  initViewportHelpers();
   initSplashScreen(loadInitialStatus());
 });
 
@@ -220,9 +255,20 @@ function initNavigation() {
   });
 }
 
+const TAB_ORDER = ['tab-download', 'tab-uncensored', 'tab-history', 'tab-settings'];
+let currentTab = 'tab-download';
+
 function switchTab(tabId) {
+  if (tabId === currentTab) {
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+    return;
+  }
+  const dir = TAB_ORDER.indexOf(tabId) < TAB_ORDER.indexOf(currentTab) ? 'left' : 'right';
+  currentTab = tabId;
+  if (dom.screensViewport) dom.screensViewport.dataset.dir = dir;
   dom.navItems.forEach(item => item.classList.toggle('active', item.dataset.tab === tabId));
   dom.screens.forEach(screen => screen.classList.toggle('active', screen.id === tabId));
+  positionNavIndicator(true);
   window.scrollTo(0, 0);
   if (tabId === 'tab-history') loadHistory();
 }
@@ -585,6 +631,7 @@ async function loadTrack(urlOrId) {
     dom.trackAlbum.textContent = t.album || (t.year ? `Релиз ${t.year}` : 'Сингл');
     if (t.cover_url) dom.trackCoverImg.src = t.cover_url;
     dom.badgeExplicit.classList.toggle('hidden', !t.explicit);
+    renderTrackQuality(t.quality);
 
     dom.btnDownloadYm.disabled = false;
     dom.btnFindUncensored.disabled = false;
@@ -602,6 +649,23 @@ async function loadTrack(urlOrId) {
     setButtonLoading(dom.btnFetchTrack, false);
     dom.trackHeroCard.classList.remove('is-loading');
   }
+}
+
+// Badge, button and note show what Yandex actually serves for this account / device
+function renderTrackQuality(q) {
+  if (!q || !q.bitrate) {
+    dom.badgeBitrate.classList.add('hidden');
+    dom.qualityNote.classList.add('hidden');
+    dom.btnDownloadYmText.textContent = 'Скачать из Яндекс Музыки';
+    return;
+  }
+  const low = q.bitrate < 320;
+  dom.badgeBitrate.textContent = `${(q.codec || 'mp3').toUpperCase()} ${q.bitrate} kbps`;
+  dom.badgeBitrate.classList.remove('hidden');
+  dom.badgeBitrate.classList.toggle('is-low', low);
+  dom.btnDownloadYmText.textContent = `Скачать из Яндекс Музыки · ${q.bitrate} kbps`;
+  dom.qualityNote.textContent = q.note || '';
+  dom.qualityNote.classList.toggle('hidden', !low || !q.note);
 }
 
 async function startYmDownload() {
@@ -622,6 +686,7 @@ function beginDownloadUi(text) {
   dom.btnFindUncensored.disabled = true;
   dom.progressContainer.classList.remove('hidden');
   dom.resultSuccessCard.classList.add('hidden');
+  dom.successQuality.classList.add('hidden');
   updateProgress(0, 0, 0, text, '');
 }
 
@@ -646,6 +711,7 @@ function startDownloadPolling() {
         endDownloadUi(true);
         const filename = p.filepath ? p.filepath.split(/[\\/]/).pop() : 'Трек сохранён';
         dom.successFilename.textContent = filename;
+        renderSavedQuality(p.quality);
         dom.resultSuccessCard.classList.remove('hidden');
         showToast('Скачивание завершено', 'success');
       } else if (p.error) {
@@ -657,6 +723,23 @@ function startDownloadPolling() {
       // transient network errors
     }
   }, 250);
+}
+
+// Bitrate after download: API value and the value measured in the file
+function renderSavedQuality(q) {
+  if (!q || !(q.file_bitrate || q.api_bitrate)) {
+    dom.successQuality.classList.add('hidden');
+    return;
+  }
+  const kbps = q.file_bitrate || q.api_bitrate;
+  const how = q.file_method === 'file_header' ? 'проверено по файлу' : 'оценка по размеру файла';
+  let text = `MP3 ${kbps} kbps · ${how}`;
+  if (q.api_bitrate && q.file_bitrate && Math.abs(q.api_bitrate - q.file_bitrate) > 8) {
+    text += ` (Яндекс заявил ${q.api_bitrate})`;
+  }
+  dom.successQuality.textContent = text;
+  dom.successQuality.classList.remove('hidden');
+  if (kbps < 320 && q.note) showToast(q.note, 'info');
 }
 
 function updateProgress(percent, dlMb, totMb, statusText, speedText) {
@@ -775,8 +858,11 @@ function renderSourceStatus(sources) {
   }
   dom.altSourceStatus.innerHTML = entries.map(([name, s]) => {
     const label = SOURCE_NAMES[name] || name;
-    if (s.error) {
-      return `<span class="source-status is-error" title="${escapeHtml(s.error)}">${escapeHtml(label)}: ${escapeHtml(shortError(name, s.error))}</span>`;
+    if (s.status === 'error' || s.error) {
+      return `<span class="source-status is-error" title="${escapeHtml(s.detail || s.error)}">${escapeHtml(label)}: ${escapeHtml(shortError(name, s.error))}</span>`;
+    }
+    if (s.status === 'empty' || s.count === 0) {
+      return `<span class="source-status is-empty">${escapeHtml(label)}: ничего не найдено</span>`;
     }
     if (s.fallback) {
       const why = s.reason ? `Spotify недоступен (${s.reason}), метаданные из ${s.fallback}` : `Метаданные из ${s.fallback}`;
@@ -791,7 +877,7 @@ function shortError(source, msg) {
   if (source === 'spotify' && /Каталоги недоступны/i.test(msg)) return 'каталоги недоступны';
   if (source === 'yandex' && /регионе|VPN/i.test(msg)) return 'недоступно без входа';
   if (source === 'yandex' && /токен|token|Unauthorized/i.test(msg)) return 'нужен вход';
-  return 'ошибка';
+  return msg || 'ошибка';
 }
 
 function renderAltCandidates(reset) {
@@ -851,7 +937,7 @@ function buildCandidateCard(c, index) {
     </div>
     <div class="candidate-meta-row">${badges.join('')}</div>
     <div class="candidate-actions">
-      <button type="button" class="liquid-button btn-glass-sm btn-play-preview">
+      <button type="button" class="liquid-button btn-glass-sm btn-play-preview" data-play-id="${escapeHtml(c.id)}">
         <span class="play-icon">${ICONS.play}</span>
         <span class="play-label">Слушать</span>
       </button>
@@ -862,7 +948,16 @@ function buildCandidateCard(c, index) {
     </div>`;
 
   const btnPlay = card.querySelector('.btn-play-preview');
-  btnPlay.addEventListener('click', () => toggleAudioPreview(c, btnPlay));
+  btnPlay.addEventListener('click', () => {
+    // Queue = the whole result list, so next / prev work from the notification too
+    const items = state.alt.results.map(x => ({ type: 'candidate', candidate: x }));
+    const index = state.alt.results.findIndex(x => x.id === c.id);
+    playFromList(items, Math.max(0, index), c.id);
+  });
+  if (Player.isActive(c.id)) {
+    card.classList.add('is-current');
+    setPreviewButton(btnPlay, Player.state === 'playing' || Player.state === 'buffering' ? 'playing' : 'idle');
+  }
   card.querySelector('.btn-dl-candidate').addEventListener('click', () => downloadAlternativeCandidate(c));
   return card;
 }
@@ -885,36 +980,9 @@ function setPreviewButton(btn, mode) {
   }
 }
 
-function stopPreview() {
-  dom.audioPlayer.pause();
-  if (state.activePreview) setPreviewButton(state.activePreview.btn, 'idle');
-  state.activePreview = null;
-}
-
-async function toggleAudioPreview(candidate, btnEl) {
-  if (state.activePreview && state.activePreview.id === candidate.id) {
-    stopPreview();
-    return;
-  }
-  stopPreview();
-  state.activePreview = { id: candidate.id, btn: btnEl };
-  setPreviewButton(btnEl, 'loading');
-
-  try {
-    const data = await postJson('/api/get_preview_url', { candidate });
-    if (!state.activePreview || state.activePreview.id !== candidate.id) return;
-    dom.audioPlayer.src = data.preview_url;
-    await dom.audioPlayer.play();
-    setPreviewButton(btnEl, 'playing');
-    dom.audioPlayer.onended = () => stopPreview();
-  } catch (err) {
-    if (state.activePreview && state.activePreview.id === candidate.id) {
-      setPreviewButton(btnEl, 'idle');
-      state.activePreview = null;
-    }
-    showToast(err.message || 'Не удалось воспроизвести', 'error');
-  }
-}
+// Playback now lives in the shared Player (section 12): searching or downloading
+// no longer interrupts the music.
+function stopPreview() {}
 
 async function downloadAlternativeCandidate(candidate) {
   if (state.isDownloading) {
@@ -956,12 +1024,15 @@ async function loadHistory() {
     }
 
     dom.historyList.innerHTML = '';
+    const queue = data.history.map(h => ({ type: 'file', filename: h.filename }));
     data.history.forEach((item, i) => {
+      const playId = `file:${item.filename}`;
       const card = document.createElement('div');
       card.className = 'liquid-card candidate-card appear';
       card.style.setProperty('--i', Math.min(i, 10));
       card.innerHTML = `
         <div class="candidate-top-row">
+          <img class="candidate-thumb" src="/api/player/art?file=${encodeURIComponent(item.filename)}" alt="" loading="lazy">
           <div class="candidate-heading">
             <span class="candidate-title">${escapeHtml(item.title || item.filename)}</span>
             <span class="candidate-channel">${escapeHtml(item.artist || 'Неизвестный исполнитель')}</span>
@@ -969,14 +1040,22 @@ async function loadHistory() {
           <span class="candidate-dur">${escapeHtml(item.size_mb)} МБ</span>
         </div>
         <div class="candidate-actions">
+          <button type="button" class="liquid-button btn-glass-sm btn-play-preview history-play" data-play-id="${escapeHtml(playId)}">
+            <span class="play-icon">${ICONS.play}</span>
+            <span class="play-label">Слушать</span>
+          </button>
           <button type="button" class="liquid-button btn-glass-sm btn-reveal-file">
             ${ICONS.folder}
-            <span>Открыть папку</span>
+            <span>Папка</span>
           </button>
         </div>`;
+      const img = card.querySelector('.candidate-thumb');
+      img.addEventListener('error', () => { img.src = 'assets/cover.jpg'; }, { once: true });
+      card.querySelector('.history-play').addEventListener('click', () => playFromList(queue, i, playId));
       card.querySelector('.btn-reveal-file').addEventListener('click', openDownloadFolder);
       dom.historyList.appendChild(card);
     });
+    syncPlayButtons();
   } catch (err) {
     dom.historyList.innerHTML = `<div class="empty-placeholder is-error">${ICONS.alert}<p>Ошибка: ${escapeHtml(err.message)}</p></div>`;
   }
@@ -1003,6 +1082,7 @@ function setSpotifyStatus(kind, text) {
 }
 
 function initSettingsEvents() {
+  if (dom.btnRunDiagnostics) dom.btnRunDiagnostics.addEventListener('click', runDiagnostics);
   if (!dom.btnSaveSpotify) return;
   dom.btnSaveSpotify.addEventListener('click', async () => {
     setButtonLoading(dom.btnSaveSpotify, true);
@@ -1145,4 +1225,463 @@ function showToast(message, type = 'info') {
   dom.toastContainer.appendChild(toast);
   while (dom.toastContainer.children.length > 3) dom.toastContainer.firstChild.remove();
   setTimeout(() => toast.remove(), 3500);
+}
+
+/* ================= 12. PLAYER (native Android service or in-app <audio>) ================= */
+// Native mode: audio plays in the Android "Player" service (notification + lock screen);
+// the page only mirrors its state. Web mode: the page plays through <audio>.
+const Player = {
+  mode: null,            // 'native' | 'web' | null
+  track: null,
+  state: 'idle',         // idle | loading | buffering | playing | paused | ended | error
+  pos: 0,
+  dur: 0,
+  hasPrev: false,
+  hasNext: false,
+  pollTimer: null,
+  busy: false,
+  seeking: false,
+  loadingId: null,
+  lastError: '',
+  listeners: [],
+
+  onChange(fn) { this.listeners.push(fn); },
+  emit() { this.listeners.forEach(fn => { try { fn(this); } catch (e) { console.error(e); } }); },
+
+  isActive(id) { return !!this.track && this.track.id === id; },
+
+  async playQueue(items, index) {
+    if (this.busy) return;
+    this.busy = true;
+    const pending = items[index];
+    this.loadingId = pending && pending.type === 'candidate' ? pending.candidate.id
+      : (pending && pending.type === 'file' ? `file:${pending.filename}` : null);
+    this.state = 'loading';
+    this.emit();
+    try {
+      const data = await postJson('/api/player/play', { items, index });
+      this.apply(data);
+    } catch (err) {
+      this.state = this.track ? 'paused' : 'idle';
+      showToast(err.message || 'Не удалось воспроизвести', 'error');
+    } finally {
+      this.busy = false;
+      this.loadingId = null;
+      this.emit();
+    }
+  },
+
+  // Applies a /api/player/play or /step answer
+  apply(data) {
+    if (!data || !data.track) return;
+    this.track = data.track;
+    this.hasPrev = !!data.has_prev;
+    this.hasNext = !!data.has_next;
+    this.pos = 0;
+    this.dur = data.track.duration || 0;
+    this.lastError = '';
+    if (data.native) {
+      if (this.mode === 'web') dom.audioPlayer.pause();
+      this.mode = 'native';
+      this.state = 'buffering';
+      this.startPolling();
+    } else {
+      this.mode = 'web';
+      this.stopPolling();
+      dom.audioPlayer.src = data.url;
+      this.state = 'buffering';
+      dom.audioPlayer.play().catch(err => {
+        this.state = 'error';
+        showToast('Не удалось воспроизвести: ' + (err.message || err.name), 'error');
+        this.emit();
+      });
+    }
+    this.emit();
+  },
+
+  async step(dir) {
+    if (this.busy) return;
+    this.busy = true;
+    const prevState = this.state;
+    this.state = 'loading';
+    this.emit();
+    try {
+      const data = await postJson('/api/player/step', { dir });
+      this.apply(data);
+    } catch (err) {
+      this.state = prevState === 'playing' ? 'playing' : 'paused';
+      showToast(err.message, 'info');
+    } finally {
+      this.busy = false;
+      this.emit();
+    }
+  },
+
+  toggle() {
+    if (!this.track) return;
+    if (this.mode === 'web') {
+      const a = dom.audioPlayer;
+      if (a.paused) a.play().catch(() => {}); else a.pause();
+      return;
+    }
+    // Optimistic UI, the next poll confirms
+    this.state = this.state === 'playing' ? 'paused' : 'playing';
+    this.emit();
+    postJson('/api/player/command', { cmd: 'toggle' }).catch(err => showToast(err.message, 'error'));
+  },
+
+  seek(sec) {
+    if (!this.track) return;
+    this.pos = sec;
+    if (this.mode === 'web') {
+      try { dom.audioPlayer.currentTime = sec; } catch (e) {}
+    } else {
+      postJson('/api/player/command', { cmd: 'seek', position_ms: Math.round(sec * 1000) }).catch(() => {});
+    }
+    this.emit();
+  },
+
+  startPolling() {
+    this.stopPolling();
+    const tick = async () => {
+      try {
+        const res = await fetch('/api/player/state');
+        this.syncNative(await res.json());
+      } catch (e) { /* transient */ }
+      if (this.mode === 'native') this.pollTimer = setTimeout(tick, document.hidden ? 3000 : 700);
+    };
+    this.pollTimer = setTimeout(tick, 400);
+  },
+
+  stopPolling() {
+    if (this.pollTimer) clearTimeout(this.pollTimer);
+    this.pollTimer = null;
+  },
+
+  syncNative(s) {
+    if (!s || this.mode !== 'native') return;
+    if (!s.native) {
+      // Service lost: keep the UI usable, the next play falls back to <audio>
+      this.state = 'paused';
+      this.mode = null;
+      this.stopPolling();
+      this.emit();
+      return;
+    }
+    if (!s.track) {
+      if (this.track && !this.busy) {
+        this.track = null;
+        this.state = 'idle';
+        this.mode = null;
+        this.stopPolling();
+        this.emit();
+      }
+      return;
+    }
+    const pb = s.playback || {};
+    if (!this.busy) {
+      if (!this.track || this.track.id !== s.track.id) this.track = s.track;  // switched from the notification
+      if (pb.state && pb.state !== 'unknown') this.state = pb.state;
+    }
+    this.hasPrev = !!s.has_prev;
+    this.hasNext = !!s.has_next;
+    if (!this.seeking) this.pos = (pb.position_ms || 0) / 1000;
+    if (pb.duration_ms) this.dur = pb.duration_ms / 1000;
+    if (pb.state === 'error' && pb.error && this.lastError !== pb.error) {
+      this.lastError = pb.error;
+      showToast(pb.error, 'error');
+    }
+    this.emit();
+  }
+};
+
+function initPlayer() {
+  const a = dom.audioPlayer;
+  a.preload = 'auto';
+  // Events of the silent unlock sound are ignored (see unlockAudio)
+  const real = () => Player.mode === 'web' && !isSilentSrc();
+  a.addEventListener('playing', () => { if (real()) { Player.state = 'playing'; Player.emit(); } });
+  a.addEventListener('pause', () => {
+    if (real() && Player.state !== 'loading' && !a.ended) { Player.state = 'paused'; Player.emit(); }
+  });
+  a.addEventListener('waiting', () => { if (real()) { Player.state = 'buffering'; Player.emit(); } });
+  a.addEventListener('timeupdate', () => {
+    if (!real() || Player.seeking) return;
+    Player.pos = a.currentTime || 0;
+    if (isFinite(a.duration) && a.duration > 0) Player.dur = a.duration;
+    Player.emit();
+  });
+  a.addEventListener('ended', () => {
+    if (!real()) return;
+    if (Player.hasNext) Player.step(1);
+    else { Player.state = 'ended'; Player.emit(); }
+  });
+  a.addEventListener('error', () => {
+    if (!real() || !a.getAttribute('src')) return;
+    Player.state = 'error';
+    showToast('Поток не воспроизводится в приложении', 'error');
+    Player.emit();
+  });
+
+  // Lock-screen metadata where the WebView supports it (web mode only)
+  if ('mediaSession' in navigator) {
+    Player.onChange(p => {
+      if (p.mode !== 'web' || !p.track) return;
+      try {
+        navigator.mediaSession.metadata = new MediaMetadata({
+          title: p.track.title, artist: p.track.artist,
+          artwork: p.track.cover ? [{ src: p.track.cover, sizes: '512x512' }] : []
+        });
+      } catch (e) {}
+    });
+    try {
+      navigator.mediaSession.setActionHandler('play', () => Player.toggle());
+      navigator.mediaSession.setActionHandler('pause', () => Player.toggle());
+      navigator.mediaSession.setActionHandler('nexttrack', () => Player.step(1));
+      navigator.mediaSession.setActionHandler('previoustrack', () => Player.step(-1));
+    } catch (e) {}
+  }
+
+  // Mini player
+  dom.miniToggle.addEventListener('click', () => Player.toggle());
+  dom.miniNext.addEventListener('click', () => Player.step(1));
+  dom.miniOpen.addEventListener('click', openPlayerSheet);
+
+  // Full player
+  document.querySelectorAll('[data-close-player]').forEach(el => el.addEventListener('click', closePlayerSheet));
+  dom.sheetToggle.addEventListener('click', () => Player.toggle());
+  dom.sheetPrev.addEventListener('click', () => {
+    if (Player.pos > 5 || !Player.hasPrev) Player.seek(0);
+    else Player.step(-1);
+  });
+  dom.sheetNext.addEventListener('click', () => Player.step(1));
+  dom.sheetSeek.addEventListener('input', () => {
+    Player.seeking = true;
+    const sec = (dom.sheetSeek.value / 1000) * (Player.dur || 0);
+    dom.sheetPos.textContent = fmtTime(sec);
+    dom.sheetSeek.style.setProperty('--p', `${dom.sheetSeek.value / 10}%`);
+  });
+  dom.sheetSeek.addEventListener('change', () => {
+    Player.seek((dom.sheetSeek.value / 1000) * (Player.dur || 0));
+    setTimeout(() => { Player.seeking = false; }, 800);
+  });
+
+  // Swipe down closes the sheet
+  let startY = null;
+  dom.sheetPanel.addEventListener('touchstart', e => { startY = e.touches[0].clientY; }, { passive: true });
+  dom.sheetPanel.addEventListener('touchend', e => {
+    if (startY !== null && e.changedTouches[0].clientY - startY > 90 && dom.sheetPanel.scrollTop <= 0) closePlayerSheet();
+    startY = null;
+  }, { passive: true });
+
+  // Back to the app (e.g. after using the notification): resync at once
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden && Player.mode === 'native') Player.startPolling();
+  });
+
+  Player.onChange(renderPlayerUi);
+  renderPlayerUi(Player);
+}
+
+function fmtTime(sec) {
+  sec = Math.max(0, Math.floor(sec || 0));
+  return `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`;
+}
+
+function openPlayerSheet() {
+  if (!Player.track) return;
+  dom.playerSheet.classList.add('is-open');
+  dom.playerSheet.setAttribute('aria-hidden', 'false');
+}
+
+function closePlayerSheet() {
+  dom.playerSheet.classList.remove('is-open');
+  dom.playerSheet.setAttribute('aria-hidden', 'true');
+}
+
+function renderPlayerUi(p) {
+  const visible = !!p.track || p.state === 'loading';
+  dom.miniPlayer.classList.toggle('is-visible', visible);
+  dom.miniPlayer.setAttribute('aria-hidden', visible ? 'false' : 'true');
+  document.body.classList.toggle('has-player', visible);
+  if (!visible) closePlayerSheet();
+
+  const t = p.track || {};
+  const cover = t.cover || 'assets/cover.jpg';
+  if (dom.miniCover.getAttribute('src') !== cover) {
+    dom.miniCover.src = cover;
+    dom.sheetCover.src = cover;
+  }
+  dom.miniTitle.textContent = t.title || (p.state === 'loading' ? 'Загрузка…' : '—');
+  dom.miniArtist.textContent = t.artist || '';
+  dom.sheetTitle.textContent = t.title || '—';
+  dom.sheetArtist.textContent = t.artist || '';
+  dom.sheetSource.textContent = t.source || '';
+  dom.sheetSource.classList.toggle('hidden', !t.source);
+
+  const loading = p.state === 'loading' || p.state === 'buffering';
+  const playing = p.state === 'playing';
+  const icon = loading ? '<span class="spinner"></span>' : (playing ? ICONS.pause : ICONS.play);
+  dom.miniToggle.querySelector('.mini-btn-icon').innerHTML = icon;
+  dom.sheetToggle.querySelector('.sheet-btn-icon').innerHTML = icon;
+  dom.miniToggle.setAttribute('aria-label', playing ? 'Пауза' : 'Играть');
+  dom.sheetToggle.setAttribute('aria-label', playing ? 'Пауза' : 'Играть');
+  dom.miniNext.disabled = !p.hasNext || p.busy;
+  dom.sheetNext.disabled = !p.hasNext || p.busy;
+  dom.sheetPrev.disabled = p.busy;
+  dom.playerSheet.classList.toggle('is-playing', playing || loading);
+
+  const frac = p.dur > 0 ? Math.min(1, p.pos / p.dur) : 0;
+  dom.miniProgressFill.style.transform = `scaleX(${frac})`;
+  if (!p.seeking) {
+    dom.sheetSeek.value = Math.round(frac * 1000);
+    dom.sheetSeek.style.setProperty('--p', `${frac * 100}%`);
+    dom.sheetPos.textContent = fmtTime(p.pos);
+  }
+  dom.sheetDur.textContent = fmtTime(p.dur);
+  dom.sheetHint.textContent = p.mode === 'native' ? 'Управление также в шторке уведомлений и на экране блокировки'
+    : (p.mode === 'web' && /Android/i.test(navigator.userAgent) ? 'Системный плеер недоступен, играет внутри приложения' : '');
+
+  syncPlayButtons();
+}
+
+// Play buttons on cards mirror the player state
+function syncPlayButtons() {
+  document.querySelectorAll('[data-play-id]').forEach(btn => {
+    const id = btn.dataset.playId;
+    const current = Player.isActive(id);
+    const mode = Player.loadingId === id ? 'loading'
+      : current && (Player.state === 'playing' || Player.state === 'buffering') ? 'playing' : 'idle';
+    setPreviewButton(btn, mode);
+    const card = btn.closest('.candidate-card');
+    if (card) card.classList.toggle('is-current', current);
+  });
+}
+
+// Tap on a play button: toggle if it is the current track, otherwise start the queue
+function playFromList(items, index, id) {
+  if (Player.isActive(id) && Player.state !== 'error') {
+    if (Player.state === 'ended') Player.seek(0);
+    Player.toggle();
+    return;
+  }
+  unlockAudio();
+  Player.playQueue(items, index);
+}
+
+// Android WebView (and Chrome) only allow audio started by a tap. Resolving a stream
+// can take longer than the tap "lasts", so the <audio> element is unlocked right in
+// the tap handler with a silent sound; later play() calls on it are then allowed.
+const SILENT_WAV = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=';
+let audioUnlocked = false;
+
+function unlockAudio() {
+  if (audioUnlocked || Player.mode === 'native') return;
+  const a = dom.audioPlayer;
+  try {
+    a.src = SILENT_WAV;
+    const p = a.play();
+    if (p && p.then) p.then(() => { audioUnlocked = true; a.pause(); }).catch(() => {});
+  } catch (e) { /* ignore */ }
+}
+
+function isSilentSrc() {
+  return (dom.audioPlayer.getAttribute('src') || '').startsWith('data:');
+}
+
+/* ================= 13. VIEWPORT: keyboard, nav indicator, performance ================= */
+function initViewportHelpers() {
+  // Hide floating chrome while the keyboard is open (Android WebView resizes the viewport)
+  let fullHeight = window.innerHeight;
+  const isTouch = window.matchMedia('(pointer: coarse)').matches;
+  const isTextInput = el => !!el && (el.tagName === 'TEXTAREA' ||
+    (el.tagName === 'INPUT' && !/^(range|color|checkbox|radio|button|submit)$/i.test(el.type)));
+  const viewportHeight = () => (window.visualViewport ? window.visualViewport.height : window.innerHeight);
+  const update = () => {
+    const vh = viewportHeight();
+    const shrunk = vh < fullHeight * 0.8;
+    if (!shrunk) fullHeight = Math.max(fullHeight, vh);
+    document.body.classList.toggle('kb-open', shrunk);
+  };
+  // Hide right away on touch devices (before the resize arrives), then trust the viewport size
+  document.addEventListener('focusin', e => {
+    if (isTouch && isTextInput(e.target)) document.body.classList.add('kb-open');
+  });
+  document.addEventListener('focusout', () => setTimeout(update, 150));
+  (window.visualViewport || window).addEventListener('resize', update);
+  window.addEventListener('orientationchange', () => { fullHeight = 0; setTimeout(update, 350); });
+
+  // Sliding nav indicator
+  window.addEventListener('resize', () => positionNavIndicator(false));
+  requestAnimationFrame(() => positionNavIndicator(false));
+
+  detectLowPerformance();
+}
+
+function positionNavIndicator(animate = true) {
+  const bar = dom.navBar;
+  const active = bar && bar.querySelector('.nav-item.active');
+  if (!active) return;
+  const ind = bar.querySelector('.nav-indicator');
+  if (!animate) ind.style.transition = 'none';
+  bar.style.setProperty('--ind-x', `${active.offsetLeft}px`);
+  bar.style.setProperty('--ind-w', `${active.offsetWidth}px`);
+  if (!animate) requestAnimationFrame(() => { ind.style.transition = ''; });
+}
+
+// Slow device: measure frame time right after start and drop the blur if it struggles
+function detectLowPerformance() {
+  try {
+    if (localStorage.getItem('yasave_lowfx') === '1') {
+      document.documentElement.classList.add('low-fx');
+      return;
+    }
+  } catch (e) {}
+  let frames = 0;
+  let slow = 0;
+  let last = 0;
+  const started = performance.now();
+  const step = (t) => {
+    if (last) {
+      frames++;
+      if (t - last > 34) slow++;   // below ~30 fps
+    }
+    last = t;
+    if (t - started < 2500) requestAnimationFrame(step);
+    else if (frames > 20 && slow / frames > 0.35) {
+      document.documentElement.classList.add('low-fx');
+      try { localStorage.setItem('yasave_lowfx', '1'); } catch (e) {}
+    }
+  };
+  setTimeout(() => requestAnimationFrame(step), 1200);  // after the splash
+}
+
+/* ================= 14. DIAGNOSTICS ================= */
+async function runDiagnostics() {
+  const btn = dom.btnRunDiagnostics;
+  setButtonLoading(btn, true);
+  dom.diagOutput.classList.remove('hidden');
+  dom.diagOutput.innerHTML = '<div class="diag-env"><span class="spinner"></span> Проверяем сеть и источники (до 40 с)…</div>';
+  try {
+    const res = await fetch('/api/diagnostics');
+    const d = await res.json();
+    if (!res.ok) throw new Error(d.error || `HTTP ${res.status}`);
+    const row = r => `
+      <div class="diag-row ${r.ok ? '' : 'is-bad'}">
+        <span class="diag-dot"></span>
+        <span class="diag-name">${escapeHtml(r.name)}<small>${escapeHtml(r.ok ? (r.detail || 'ok') : (r.error || 'ошибка'))}</small></span>
+        <span class="diag-ms">${r.ms != null ? `${r.ms} мс` : ''}</span>
+      </div>`;
+    const env = d.env || {};
+    dom.diagOutput.innerHTML = `
+      <div class="diag-section">Источники</div>
+      ${(d.functional || []).map(row).join('')}
+      <div class="diag-section">Доступ к сайтам</div>
+      ${(d.network || []).map(row).join('')}
+      <div class="diag-env">Python ${escapeHtml(env.python)} · yt-dlp ${escapeHtml(env.yt_dlp)} · кеш ${env.cache_writable ? 'доступен' : 'НЕ доступен для записи'}</div>`;
+  } catch (err) {
+    dom.diagOutput.innerHTML = `<div class="diag-row is-bad"><span class="diag-dot"></span><span class="diag-name">Проверка не выполнена<small>${escapeHtml(err.message)}</small></span><span></span></div>`;
+  } finally {
+    setButtonLoading(btn, false);
+  }
 }
