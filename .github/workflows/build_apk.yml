@@ -59,6 +59,7 @@ jobs:
           path: |
             ~/.buildozer
             .buildozer
+            !.buildozer/android/platform/build-*/build/venv
           key: buildozer-${{ runner.os }}-${{ hashFiles('buildozer.spec') }}
           restore-keys: |
             buildozer-${{ runner.os }}-
@@ -81,6 +82,11 @@ jobs:
           else
             echo "::warning title=Debug keystore::Keystore restored, but alias 'androiddebugkey' with password 'android' was not found. Gradle may fail to sign the APK."
           fi
+
+      # p4a's helper venv for pip-only requirements must never come from the cache:
+      # a restored copy ends up with a half-upgraded pip (ImportError on startup).
+      - name: Drop stale p4a pip venv
+        run: rm -rf .buildozer/android/platform/build-*/build/venv
 
       - name: Build APK with Buildozer
         run: |
