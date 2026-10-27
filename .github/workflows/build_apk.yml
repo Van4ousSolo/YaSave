@@ -96,6 +96,62 @@ jobs:
         run: |
           buildozer -v android debug || { echo "=== BUILDOZER LOG DUMP ==="; tail -n 200 .buildozer/buildozer.log 2>/dev/null; exit 1; }
 
+      # Fails the build if the APK misses the native player, its manifest entries or our assets
+      - name: Verify APK contents
+        run: |
+          set -u
+          APK=$(ls -t bin/*.apk | head -n1)
+          OUT=apk-check; rm -rf "$OUT"; mkdir -p "$OUT"
+          BT=$(ls -d ~/.buildozer/android/platform/android-sdk/build-tools/* | sort -V | tail -n1)
+          echo "APK: $APK"; echo "build-tools: $BT"
+          FAIL=0
+          ok()  { echo "  OK   $1"; }
+          bad() { echo "::error title=APK check::$1"; echo "  FAIL $1"; FAIL=1; }
+
+          echo "== dex classes =="
+          unzip -o -q "$APK" 'classes*.dex' -d "$OUT/dex"
+          for d in "$OUT"/dex/classes*.dex; do "$BT/dexdump" "$d" 2>/dev/null | grep "Class descriptor" | sed "s/.*'\(.*\)'/\1/" ; done | sort -u > "$OUT/dex-classes.txt"
+          echo "  $(wc -l < "$OUT/dex-classes.txt") classes"
+          for c in Lorg/yasave/media/YaSavePlayer\; Lorg/yasave/media/YaSaveMediaService\; Lorg/kivy/android/PythonActivity\;; do
+            grep -qxF "$c" "$OUT/dex-classes.txt" && ok "class $c" || bad "class $c is missing from classes*.dex"
+          done
+
+          echo "== manifest =="
+          "$BT/aapt2" dump xmltree --file AndroidManifest.xml "$APK" > "$OUT/AndroidManifest.txt"
+          "$BT/aapt" dump badging "$APK" > "$OUT/badging.txt" 2>/dev/null || true
+          grep -E "uses-permission|service|receiver|foregroundServiceType" "$OUT/AndroidManifest.txt" | sed 's/^ *//' | sort -u
+          for p in POST_NOTIFICATIONS FOREGROUND_SERVICE FOREGROUND_SERVICE_MEDIA_PLAYBACK WAKE_LOCK; do
+            grep -q "\"android.permission.$p\"" "$OUT/AndroidManifest.txt" && ok "permission $p" || bad "permission $p is not declared"
+          done
+          grep -q '"org.yasave.media.YaSaveMediaService"' "$OUT/AndroidManifest.txt" && ok "service YaSaveMediaService" || bad "service YaSaveMediaService is not declared"
+          # foregroundServiceType attribute is an int flag; mediaPlayback = 0x2
+          awk '/org.yasave.media.YaSaveMediaService/{f=1} f&&/foregroundServiceType/{print; exit}' "$OUT/AndroidManifest.txt" | tee "$OUT/fgs-type.txt" \
+            | grep -qiE '=("?mediaPlayback"?|(\(type 0x[0-9a-f]+\))?0x0*2|2)([^0-9a-fx]|$)' \
+            && ok "service type mediaPlayback" || bad "YaSaveMediaService has no foregroundServiceType=mediaPlayback"
+
+          echo "== assets =="
+          unzip -l "$APK" > "$OUT/apk-files.txt"
+          grep -q " assets/_load.html$" "$OUT/apk-files.txt" && ok "assets/_load.html" || bad "android/_load.html is not packaged as assets/_load.html"
+          grep -q " assets/_yasave_icon.png$" "$OUT/apk-files.txt" && ok "assets/_yasave_icon.png" || bad "icon asset _yasave_icon.png is missing"
+          SPLASH=$(grep -oE "res/drawable[^ ]*/presplash\.[a-z]+" "$OUT/apk-files.txt" | head -n1 || true)
+          if [ -z "$SPLASH" ]; then bad "presplash is missing"; else
+            unzip -p "$APK" "$SPLASH" | sha256sum | cut -d' ' -f1 > "$OUT/splash.sha"
+            if [ "$(cat "$OUT/splash.sha")" = "$(sha256sum assets/presplash.png | cut -d' ' -f1)" ]; then ok "presplash = assets/presplash.png"
+            else echo "::warning title=APK check::$SPLASH differs from assets/presplash.png (may be the default kivy splash)"; fi
+          fi
+
+          if [ "$FAIL" -ne 0 ]; then echo "APK check FAILED, see the apk-check artifact"; exit 1; fi
+          echo "APK check passed"
+
+      - name: Upload APK check details
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: apk-check
+          path: apk-check/
+          if-no-files-found: ignore
+          retention-days: 14
+
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:

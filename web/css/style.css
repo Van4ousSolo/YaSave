@@ -3076,3 +3076,160 @@ body.kb-open .mini-player {
 .mini-player .mini-btn {
   width: 38px;
 }
+
+/* ================= v3.2: one bottom dock (mini player + nav) ================= */
+/* One fixed glass block: no gap where content shows through, padding follows its real height. */
+.bottom-dock {
+  position: fixed;
+  left: 50%;
+  bottom: var(--nav-bottom);
+  width: var(--float-w);
+  z-index: 120;
+  border-radius: 28px;
+  overflow: hidden;
+  transform: translate3d(-50%, 0, 0);
+  transition: transform 0.42s var(--spring), opacity 0.25s ease;
+  background:
+    linear-gradient(180deg, var(--spec) 0%, rgba(255, 255, 255, 0) 46%),
+    var(--dock-bg);
+  backdrop-filter: blur(var(--blur-float)) saturate(var(--sat-float));
+  -webkit-backdrop-filter: blur(var(--blur-float)) saturate(var(--sat-float));
+  box-shadow: var(--shadow-float), var(--inner-shadow);
+}
+
+[data-theme="dark"] { --dock-bg: rgba(16, 19, 30, 0.96); }
+[data-theme="light"] { --dock-bg: rgba(250, 251, 254, 0.97); }
+
+.bottom-dock::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 1px;
+  background: linear-gradient(140deg, var(--rim-hi) 0%, var(--rim-mid) 24%, var(--rim-lo) 52%, var(--rim-mid) 82%, rgba(255, 255, 255, 0.22) 100%);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  pointer-events: none;
+  z-index: 3;
+}
+
+html.low-fx .bottom-dock {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+/* Children are parts of the dock, not separate floating cards */
+.bottom-dock .mini-player,
+.bottom-dock .liquid-nav-bar {
+  position: relative;
+  left: auto;
+  bottom: auto;
+  width: 100%;
+  transform: none;
+  background: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  box-shadow: none;
+  border-radius: 0;
+}
+
+.bottom-dock .mini-player {
+  height: auto;
+  max-height: 0;
+  padding: 0 6px 0 8px;
+  opacity: 0;
+  overflow: hidden;
+  transition: max-height 0.4s var(--ease-out), padding 0.4s var(--ease-out), opacity 0.25s ease;
+}
+
+.bottom-dock .mini-player.is-visible {
+  max-height: 80px;
+  padding: 9px 6px 9px 9px;
+  opacity: 1;
+  transform: none;
+}
+
+.bottom-dock .mini-player .mini-progress {
+  bottom: 2px;
+}
+
+.bottom-dock .mini-player.is-visible + .liquid-nav-bar {
+  border-top: 1px solid var(--rim-mid);
+}
+
+.bottom-dock .liquid-nav-bar {
+  height: var(--nav-h);
+}
+
+body.kb-open .bottom-dock {
+  transform: translate3d(-50%, calc(100% + var(--nav-bottom) + 20px), 0);
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* Scroll padding = real dock height (set by JS from a ResizeObserver) */
+.app-container,
+body.has-player .app-container {
+  padding-bottom: calc(var(--dock-h, 66px) + var(--nav-bottom) + 18px);
+}
+
+/* ================= v3.2: diagnostics text never overflows ================= */
+.diag-output,
+.diag-name small,
+#bg-player-status,
+.bg-step-text small,
+.quality-note {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.diag-output {
+  max-height: 340px;
+  overflow-y: auto;
+}
+
+#bg-player-status {
+  display: block;
+  max-height: 140px;
+  overflow-y: auto;
+  border-radius: var(--r-sm);
+  padding: 8px 12px;
+  flex: 1;
+  min-width: 0;
+}
+
+.bg-step.is-unknown .bg-step-dot {
+  background: transparent;
+  border: 1.5px dashed #ffb340;
+}
+
+.bg-step-reason {
+  color: #ffb340 !important;
+}
+
+.log-box {
+  font-family: ui-monospace, "Cascadia Mono", Menlo, Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+  background: rgba(0, 0, 0, 0.28);
+  border-radius: var(--r-sm);
+  padding: 10px 12px;
+  max-height: 260px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+[data-theme="light"] .log-box {
+  background: rgba(10, 17, 32, 0.06);
+}
+
+.log-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}

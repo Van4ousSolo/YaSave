@@ -84,6 +84,7 @@ public final class YaSavePlayer {
     private volatile int seq = 0;
     private volatile Bitmap cover;
     private volatile boolean resumeOnFocusGain = false;
+    private volatile boolean testMode = false;
 
     private final Runnable ticker = new Runnable() {
         @Override
@@ -162,6 +163,7 @@ public final class YaSavePlayer {
                      final String coverRef, final long durationHintMs,
                      final boolean prev, final boolean next) {
         Log.i(TAG, "play: '" + newTitle + "' prev=" + prev + " next=" + next);
+        testMode = false;
         seq++;
         title = newTitle != null ? newTitle : "";
         artist = newArtist != null ? newArtist : "";
@@ -250,6 +252,64 @@ public final class YaSavePlayer {
         });
     }
 
+    /**
+     * Settings -> "Проверить плеер в шторке": shows a test notification through the
+     * same path as real playback (channel, MediaSession, foreground service), no audio.
+     * Does nothing while real music is loaded.
+     */
+    public void startSelfTest() {
+        post(new Runnable() {
+            @Override
+            public void run() {
+                if (player != null && !"idle".equals(state)) {
+                    Log.i(TAG, "self-test: skipped, music is loaded");
+                    return;
+                }
+                Log.i(TAG, "self-test: start");
+                testMode = true;
+                seq++;
+                title = "YaSave: проверка плеера";
+                artist = "Если вы видите это уведомление, плеер в шторке работает";
+                durationMs = 0;
+                positionMs = 0;
+                state = "paused";
+                error = "";
+                ensureService();
+                publish();
+            }
+        });
+    }
+
+    /** Ends the self-test notification (no effect on real playback). */
+    public void endSelfTest() {
+        post(new Runnable() {
+            @Override
+            public void run() {
+                if (testMode && player == null) {
+                    Log.i(TAG, "self-test: end");
+                    testMode = false;
+                    doStop();
+                }
+            }
+        });
+    }
+
+    private boolean sessionActive() {
+        try {
+            return session != null && session.isActive();
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    private boolean channelExists() {
+        try {
+            return Build.VERSION.SDK_INT < 26 || notifications.getNotificationChannel(CHANNEL_ID) != null;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
     /** Returns "next", "prev", "ended", "stop" or null. */
     public String pollCommand() {
         return commands.poll();
@@ -265,6 +325,10 @@ public final class YaSavePlayer {
                 + ",\"has_next\":" + hasNext
                 + ",\"foreground\":" + foreground
                 + ",\"service\":" + (service != null)
+                + ",\"session\":" + (session != null)
+                + ",\"session_active\":" + sessionActive()
+                + ",\"channel\":" + channelExists()
+                + ",\"test\":" + testMode
                 + ",\"error\":\"" + escape(error) + "\""
                 + ",\"notification_error\":\"" + escape(notifError) + "\""
                 + ",\"title\":\"" + escape(title) + "\"}";

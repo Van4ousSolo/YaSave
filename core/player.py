@@ -95,22 +95,15 @@ class NativeBridge:
     """pyjnius wrapper around org.yasave.media.YaSavePlayer (same process, no IPC)."""
 
     def __init__(self):
-        from jnius import autoclass  # type: ignore
-        self._activity = autoclass("org.kivy.android.PythonActivity").mActivity
-        if self._activity is None:
-            raise RuntimeError("PythonActivity.mActivity is null")
-        self._cls = autoclass("org.yasave.media.YaSavePlayer")
-        self.player = self._cls.get(self._activity)
-        logger.info("native: YaSavePlayer ready")
+        from . import android_bridge as ab
+        # Class objects come from the main-thread preload (see android_bridge)
+        self._cls = ab.jclass("org.yasave.media.YaSavePlayer")
+        logger.info("native: step 1 - class org.yasave.media.YaSavePlayer found")
+        self.player = self._cls.get(ab.activity())
+        logger.info("native: step 2 - YaSavePlayer instance created")
 
     def state(self) -> Dict[str, Any]:
         return json.loads(self.player.getStateJson())
-
-    def system_status(self) -> Dict[str, Any]:
-        return json.loads(self._cls.systemStatus(self._activity))
-
-    def open_settings(self, which: str) -> bool:
-        return bool(self._cls.openSettings(self._activity, which))
 
 
 class PlayerController:
@@ -401,29 +394,80 @@ class PlayerController:
     # ------------------------------------------------------------------
 
     def system_status(self) -> Dict[str, Any]:
+        from . import android_bridge as ab
         out: Dict[str, Any] = {"android": is_android(), "native": bool(self.native_ok),
                                "native_error": self.native_error}
         if not is_android():
             return out
+        try:
+            out.update(ab.system_status())
+        except Exception as e:
+            out["status_error"] = f"{type(e).__name__}: {e}"
+            logger.exception("status: framework checks failed")
         self.ensure_native()
+        out["native"] = bool(self.native_ok)
+        out["native_error"] = self.native_error
         if self.native:
             try:
-                out.update(self.native.system_status())
                 out["playback"] = self.native.state()
             except Exception as e:
-                out["status_error"] = str(e)
-                logger.exception("native: system status failed")
-        try:
-            from android.permissions import check_permission  # type: ignore
-            out["notification_permission"] = bool(check_permission("android.permission.POST_NOTIFICATIONS"))
-        except Exception as e:
-            out["notification_permission"] = None
-            logger.debug(f"check_permission failed: {e}")
+                out["playback_error"] = str(e)
         return out
 
     def open_settings(self, which: str) -> Dict[str, Any]:
-        if which == "permission":
-            return {"result": self.request_notification_permission(force=True)}
-        if not (is_android() and self.ensure_native() and self.native):
+        from . import android_bridge as ab
+        if not is_android():
             raise RuntimeError("Доступно только в Android-приложении")
-        return {"opened": self.native.open_settings(which)}
+        if which == "permission":
+            return {"result": ab.request_notification_permission()}
+        return {"opened": ab.open_settings(which)}
+
+    def self_test(self) -> Dict[str, Any]:
+        """Settings -> "Проверить плеер в шторке": every step with a short reason."""
+        steps: List[Dict[str, Any]] = []
+
+        def step(name, ok, detail=""):
+            steps.append({"name": name, "ok": ok, "detail": detail})
+            logger.info(f"self-test: {name}: {'OK' if ok else 'FAIL'} {detail}")
+            return ok
+
+        if not is_android():
+            step("Android", False, "проверка возможна только на телефоне")
+            return {"steps": steps}
+        from . import android_bridge as ab
+        try:
+            ab.jclass("org.yasave.media.YaSavePlayer")
+            step("Класс YaSavePlayer найден", True)
+        except Exception as e:
+            step("Класс YaSavePlayer найден", False, str(e)[:300])
+            return {"steps": steps}
+        if not step("Плеер создан", self.ensure_native(), self.native_error):
+            return {"steps": steps}
+        st = ab.system_status()
+        perm = st.get("notification_permission", {})
+        step("Разрешение на уведомления", perm.get("value") is True,
+             perm.get("reason") or ("" if perm.get("value") else "не выдано"))
+        try:
+            busy = (self.current is not None)
+            if not busy:
+                self.native.player.startSelfTest()
+            deadline = time.time() + 6
+            pb: Dict[str, Any] = {}
+            while time.time() < deadline:
+                pb = self.native.state()
+                if pb.get("foreground") or pb.get("notification_error"):
+                    break
+                time.sleep(0.3)
+            step("Канал уведомлений создан", bool(pb.get("channel")))
+            step("MediaSession создана", bool(pb.get("session")))
+            step("MediaSession активна", bool(pb.get("session_active")))
+            step("Сервис запущен", bool(pb.get("service")), pb.get("notification_error") or "")
+            step("Уведомление в шторке (foreground)", bool(pb.get("foreground")),
+                 pb.get("notification_error") or ("" if pb.get("foreground") else "нет ответа за 6 с"))
+            if not busy:
+                # keep the test notification for a while so it can be seen, then remove it
+                threading.Timer(12.0, lambda: self.native.player.endSelfTest()).start()
+        except Exception as e:
+            logger.exception("self-test failed")
+            step("Тестовое уведомление", False, f"{type(e).__name__}: {e}"[:300])
+        return {"steps": steps}

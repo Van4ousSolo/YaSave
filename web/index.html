@@ -456,6 +456,26 @@
           </div>
         </div>
 
+        <!-- Player diagnostics: in-app log + notification self-test -->
+        <div class="liquid-card settings-card">
+          <div>
+            <h4 class="settings-group-title">Диагностика плеера</h4>
+            <p class="settings-group-desc">Проверка плеера в шторке по шагам и последние 200 строк журнала YaSave. Журнал можно скопировать или отправить, adb не нужен.</p>
+          </div>
+          <button class="liquid-button btn-glass-sm" id="btn-player-selftest">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path><path d="M13.73 21a2 2 0 0 1-3.46 0"></path></svg>
+            <span>Проверить плеер в шторке</span>
+          </button>
+          <div id="selftest-output" class="diag-output hidden"></div>
+          <pre id="player-log" class="log-box">Журнал пуст</pre>
+          <div class="log-actions">
+            <button type="button" class="liquid-button btn-glass-sm" id="btn-log-refresh">Обновить</button>
+            <button type="button" class="liquid-button btn-glass-sm" id="btn-log-copy">Скопировать</button>
+            <button type="button" class="liquid-button btn-glass-sm" id="btn-log-save">Сохранить файл</button>
+            <button type="button" class="liquid-button btn-glass-sm" id="btn-log-share">Поделиться</button>
+          </div>
+        </div>
+
         <!-- Yandex quality check -->
         <div class="liquid-card settings-card">
           <div>
@@ -516,27 +536,6 @@
   </div>
 
 
-  <!-- Mini player (above the nav bar) -->
-  <div id="mini-player" class="mini-player glass-float" aria-hidden="true">
-    <button type="button" class="mini-open" id="mini-open" aria-label="Открыть плеер">
-      <img class="mini-cover" id="mini-cover" src="assets/cover.jpg" alt="">
-      <span class="mini-text">
-        <span class="mini-title" id="mini-title">—</span>
-        <span class="mini-artist" id="mini-artist"></span>
-      </span>
-    </button>
-    <button type="button" class="mini-btn" id="mini-prev" aria-label="Предыдущий трек">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="19 20 9 12 19 4 19 20"></polygon><line x1="5" y1="19" x2="5" y2="5"></line></svg>
-    </button>
-    <button type="button" class="mini-btn" id="mini-toggle" aria-label="Пауза">
-      <span class="mini-btn-icon"></span>
-    </button>
-    <button type="button" class="mini-btn" id="mini-next" aria-label="Следующий трек">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 4 15 12 5 20 5 4"></polygon><line x1="19" y1="5" x2="19" y2="19"></line></svg>
-    </button>
-    <div class="mini-progress"><div class="mini-progress-fill" id="mini-progress-fill"></div></div>
-  </div>
-
   <!-- Full player sheet -->
   <div id="player-sheet" class="player-sheet" aria-hidden="true">
     <div class="player-sheet-backdrop" data-close-player></div>
@@ -572,29 +571,54 @@
     </div>
   </div>
 
-  <!-- Bottom navigation: outside .app-container so it stays fixed to the viewport -->
-  <nav class="liquid-nav-bar glass-float" id="nav-bar">
-    <span class="nav-indicator" aria-hidden="true"></span>
-    <button class="nav-item active" data-tab="tab-download">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
-      <span>Скачать</span>
-    </button>
 
-    <button class="nav-item" data-tab="tab-uncensored">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path></svg>
-      <span>Без цензуры</span>
-    </button>
 
-    <button class="nav-item" data-tab="tab-history">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>
-      <span>История</span>
-    </button>
+  <!-- Bottom dock: mini player + navigation, one fixed glass block outside .app-container -->
+  <div class="bottom-dock" id="bottom-dock">
+    <!-- Mini player (above the nav bar) -->
+    <div id="mini-player" class="mini-player" aria-hidden="true">
+      <button type="button" class="mini-open" id="mini-open" aria-label="Открыть плеер">
+        <img class="mini-cover" id="mini-cover" src="assets/cover.jpg" alt="">
+        <span class="mini-text">
+          <span class="mini-title" id="mini-title">—</span>
+          <span class="mini-artist" id="mini-artist"></span>
+        </span>
+      </button>
+      <button type="button" class="mini-btn" id="mini-prev" aria-label="Предыдущий трек">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="19 20 9 12 19 4 19 20"></polygon><line x1="5" y1="19" x2="5" y2="5"></line></svg>
+      </button>
+      <button type="button" class="mini-btn" id="mini-toggle" aria-label="Пауза">
+        <span class="mini-btn-icon"></span>
+      </button>
+      <button type="button" class="mini-btn" id="mini-next" aria-label="Следующий трек">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 4 15 12 5 20 5 4"></polygon><line x1="19" y1="5" x2="19" y2="19"></line></svg>
+      </button>
+      <div class="mini-progress"><div class="mini-progress-fill" id="mini-progress-fill"></div></div>
+    </div>
+    <!-- Bottom navigation: outside .app-container so it stays fixed to the viewport -->
+    <nav class="liquid-nav-bar" id="nav-bar">
+      <span class="nav-indicator" aria-hidden="true"></span>
+      <button class="nav-item active" data-tab="tab-download">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+        <span>Скачать</span>
+      </button>
 
-    <button class="nav-item" data-tab="tab-settings">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
-      <span>Настройки</span>
-    </button>
-  </nav>
+      <button class="nav-item" data-tab="tab-uncensored">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path></svg>
+        <span>Без цензуры</span>
+      </button>
+
+      <button class="nav-item" data-tab="tab-history">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>
+        <span>История</span>
+      </button>
+
+      <button class="nav-item" data-tab="tab-settings">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+        <span>Настройки</span>
+      </button>
+    </nav>
+  </div>
 
   <!-- ================= MODALS ================= -->
 

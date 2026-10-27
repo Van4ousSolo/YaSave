@@ -116,6 +116,14 @@ const dom = {
   bgSteps: $('bg-steps'),
   bgPlayerStatus: $('bg-player-status'),
   btnBgRefresh: $('btn-bg-refresh'),
+  bottomDock: $('bottom-dock'),
+  btnPlayerSelftest: $('btn-player-selftest'),
+  selftestOutput: $('selftest-output'),
+  playerLog: $('player-log'),
+  btnLogRefresh: $('btn-log-refresh'),
+  btnLogCopy: $('btn-log-copy'),
+  btnLogSave: $('btn-log-save'),
+  btnLogShare: $('btn-log-share'),
 
   // History
   historyList: $('history-items-list'),
@@ -165,6 +173,15 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 /* ================= HELPERS ================= */
+// Page-side steps go to the same in-app log as Python (Settings -> Диагностика плеера)
+function clientLog(msg) {
+  try {
+    fetch('/api/logs/client', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ msg })
+    }).catch(() => {});
+  } catch (e) {}
+}
+
 async function postJson(url, body, signal) {
   const res = await fetch(url, {
     method: 'POST',
@@ -277,7 +294,7 @@ function switchTab(tabId) {
   positionNavIndicator(true);
   window.scrollTo(0, 0);
   if (tabId === 'tab-history') loadHistory();
-  if (tabId === 'tab-settings') refreshBackgroundStatus();
+  if (tabId === 'tab-settings') { refreshBackgroundStatus(); loadPlayerLog(); }
 }
 
 /* ================= 3. ACCENT PALETTE & THEMES ================= */
@@ -1099,6 +1116,25 @@ function initSettingsEvents() {
   if (dom.btnRunDiagnostics) dom.btnRunDiagnostics.addEventListener('click', runDiagnostics);
   if (dom.btnQualityReport) dom.btnQualityReport.addEventListener('click', runQualityReport);
   if (dom.btnBgRefresh) dom.btnBgRefresh.addEventListener('click', refreshBackgroundStatus);
+  if (dom.btnPlayerSelftest) dom.btnPlayerSelftest.addEventListener('click', runPlayerSelfTest);
+  if (dom.btnLogRefresh) dom.btnLogRefresh.addEventListener('click', loadPlayerLog);
+  if (dom.btnLogCopy) dom.btnLogCopy.addEventListener('click', copyPlayerLog);
+  if (dom.btnLogSave) dom.btnLogSave.addEventListener('click', async () => {
+    try {
+      const r = await postJson('/api/logs/save', {});
+      showToast(`Сохранено: ${r.path}`, 'success');
+    } catch (err) { showToast(err.message, 'error'); }
+  });
+  if (dom.btnLogShare) dom.btnLogShare.addEventListener('click', async () => {
+    try {
+      await postJson('/api/logs/share', {});
+    } catch (err) {
+      // Desktop / no native layer: Web Share API or clipboard
+      const text = await fetchLogText();
+      if (navigator.share) navigator.share({ title: 'YaSave лог', text }).catch(() => {});
+      else { await copyText(text); showToast('Поделиться недоступно, журнал скопирован', 'info'); }
+    }
+  });
   document.querySelectorAll('.bg-step-btn').forEach(btn => btn.addEventListener('click', async () => {
     try {
       const r = await postJson('/api/system/open', { which: btn.dataset.open });
@@ -1280,6 +1316,7 @@ const Player = {
     if (this.busy) return;
     this.busy = true;
     const pending = items[index];
+    clientLog(`tap play: item ${index + 1}/${items.length} (${pending && pending.type})`);
     this.loadingId = pending && pending.type === 'candidate' ? pending.candidate.id
       : (pending && pending.type === 'file' ? `file:${pending.filename}` : null);
     this.state = 'loading';
@@ -1318,6 +1355,7 @@ const Player = {
     this.pos = 0;
     this.dur = data.track.duration || 0;
     this.lastError = '';
+    clientLog(`player answer: ${data.native ? 'native (shade player)' : 'web <audio>'} "${data.track.title}"`);
     if (data.native) {
       if (this.mode === 'web') dom.audioPlayer.pause();
       this.mode = 'native';
@@ -1329,6 +1367,7 @@ const Player = {
       dom.audioPlayer.src = data.url;
       this.state = 'buffering';
       dom.audioPlayer.play().catch(err => {
+        clientLog(`web audio play() failed: ${err.name}: ${err.message}`);
         this.state = 'error';
         showToast('Не удалось воспроизвести: ' + (err.message || err.name), 'error');
         this.emit();
@@ -1661,6 +1700,19 @@ function initViewportHelpers() {
   (window.visualViewport || window).addEventListener('resize', update);
   window.addEventListener('orientationchange', () => { fullHeight = 0; setTimeout(update, 350); });
 
+  // Scroll padding = real height of the dock (mini player appears / disappears)
+  if (dom.bottomDock) {
+    const setDock = () => document.documentElement.style.setProperty('--dock-h', `${dom.bottomDock.offsetHeight}px`);
+    if (window.ResizeObserver) new ResizeObserver(setDock).observe(dom.bottomDock);
+    dom.bottomDock.addEventListener('transitionend', setDock);
+    setDock();
+  }
+
+  // Back from system settings: re-check permissions / battery
+  const recheck = () => { if (!document.hidden && currentTab === 'tab-settings') refreshBackgroundStatus(); };
+  document.addEventListener('visibilitychange', recheck);
+  window.addEventListener('focus', recheck);
+
   // Sliding nav indicator
   window.addEventListener('resize', () => positionNavIndicator(false));
   requestAnimationFrame(() => positionNavIndicator(false));
@@ -1772,32 +1824,112 @@ async function runQualityReport() {
 
 async function refreshBackgroundStatus() {
   if (!dom.bgSteps) return;
+  const setStep = (key, check, okText) => {
+    const step = dom.bgSteps.querySelector(`[data-check="${key}"]`);
+    if (!step) return;
+    const value = check ? check.value : null;
+    step.classList.toggle('is-ok', value === true);
+    step.classList.toggle('is-bad', value === false);
+    step.classList.toggle('is-unknown', value === null || value === undefined);
+    const small = step.querySelector('small');
+    if (!small.dataset.base) small.dataset.base = small.textContent;
+    small.classList.toggle('bg-step-reason', value == null);
+    small.textContent = value === true ? okText
+      : value == null ? `Не удалось определить: ${(check && check.reason) || 'нет данных'}`
+      : small.dataset.base;
+  };
   try {
     const res = await fetch('/api/system/status');
     const st = await res.json();
+    if (!res.ok) throw new Error(st.error || `HTTP ${res.status}`);
     if (!st.android) {
       dom.bgPlayerStatus.textContent = 'Только для Android';
       return;
     }
-    const mark = (key, ok) => {
-      const step = dom.bgSteps.querySelector(`[data-check="${key}"]`);
-      if (!step) return;
-      step.classList.toggle('is-ok', ok === true);
-      step.classList.toggle('is-bad', ok === false);
-    };
-    const notifOk = st.notifications_enabled !== false && st.channel_enabled !== false && st.notification_permission !== false;
-    mark('notifications', notifOk);
-    mark('battery', st.battery_unrestricted === true);
+    // Notifications = runtime permission (13+) AND enabled for the app / channel
+    const perm = st.notification_permission || {};
+    const enabled = st.notifications_enabled || {};
+    let notif;
+    if (perm.value === false || enabled.value === false) notif = { value: false };
+    else if (perm.value === true && enabled.value === true) notif = { value: true };
+    else notif = { value: null, reason: perm.reason || enabled.reason };
+    setStep('notifications', notif, 'Разрешены');
+    setStep('battery', st.battery_unrestricted, 'Без ограничений');
+
     const pb = st.playback || {};
     let text;
-    if (!st.native) text = `Системный плеер недоступен: ${st.native_error || 'нет данных'}`;
+    if (st.status_error) text = `Не удалось проверить статус: ${st.status_error}`;
+    else if (!st.native) text = `Системный плеер недоступен: ${st.native_error || 'нет данных'}`;
     else if (pb.notification_error) text = `Уведомление: ${pb.notification_error}`;
     else if (pb.foreground) text = 'Плеер в шторке активен';
     else text = 'Системный плеер готов';
     dom.bgPlayerStatus.textContent = text;
-    dom.bgPlayerStatus.classList.toggle('is-ok', !!st.native && !pb.notification_error);
+    dom.bgPlayerStatus.classList.toggle('is-ok', !!st.native && !pb.notification_error && !st.status_error);
     dom.bgPlayerStatus.classList.toggle('is-error', !st.native || !!pb.notification_error);
   } catch (err) {
-    dom.bgPlayerStatus.textContent = 'Статус недоступен';
+    dom.bgPlayerStatus.textContent = `Статус недоступен: ${err.message}`;
+  }
+}
+
+/* ================= 16. PLAYER DIAGNOSTICS: self-test + in-app log ================= */
+async function fetchLogText() {
+  const res = await fetch('/api/logs');
+  const data = await res.json();
+  return data.text || '';
+}
+
+async function loadPlayerLog() {
+  if (!dom.playerLog) return;
+  try {
+    const text = await fetchLogText();
+    dom.playerLog.textContent = text || 'Журнал пуст';
+    dom.playerLog.scrollTop = dom.playerLog.scrollHeight;
+  } catch (err) {
+    dom.playerLog.textContent = `Журнал недоступен: ${err.message}`;
+  }
+}
+
+async function copyText(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch (e) {
+    // WebView without clipboard permission: select + execCommand
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    const ok = document.execCommand('copy');
+    ta.remove();
+    return ok;
+  }
+}
+
+async function copyPlayerLog() {
+  const ok = await copyText(await fetchLogText());
+  showToast(ok ? 'Журнал скопирован' : 'Не удалось скопировать', ok ? 'success' : 'error');
+}
+
+async function runPlayerSelfTest() {
+  setButtonLoading(dom.btnPlayerSelftest, true);
+  dom.selftestOutput.classList.remove('hidden');
+  dom.selftestOutput.innerHTML = '<div class="diag-env"><span class="spinner"></span> Проверяем по шагам (до 10 с)…</div>';
+  clientLog('self-test requested');
+  try {
+    const r = await postJson('/api/player/selftest', {});
+    dom.selftestOutput.innerHTML = (r.steps || []).map(st => `
+      <div class="diag-row ${st.ok ? '' : 'is-bad'}">
+        <span class="diag-dot"></span>
+        <span class="diag-name">${escapeHtml(st.name)}${st.detail ? `<small>${escapeHtml(st.detail)}</small>` : ''}</span>
+        <span class="diag-ms">${st.ok ? 'ok' : 'нет'}</span>
+      </div>`).join('');
+  } catch (err) {
+    dom.selftestOutput.innerHTML = `<div class="diag-row is-bad"><span class="diag-dot"></span><span class="diag-name">Проверка не выполнена<small>${escapeHtml(err.message)}</small></span><span></span></div>`;
+  } finally {
+    setButtonLoading(dom.btnPlayerSelftest, false);
+    loadPlayerLog();
+    refreshBackgroundStatus();
   }
 }

@@ -324,6 +324,7 @@ def _player_call(fn):
 @app.route('/api/player/play', method='POST')
 def api_player_play():
     data = request.json or {}
+    logger.info(f"api: player/play {len(data.get('items') or [])} items, index {data.get('index')}")
     return _player_call(lambda: PlayerController.get().play_queue(data.get("items") or [], data.get("index") or 0))
 
 @app.route('/api/player/step', method='POST')
@@ -335,6 +336,42 @@ def api_player_step():
 def api_player_previous():
     data = request.json or {}
     return _player_call(lambda: PlayerController.get().previous(float(data.get("position") or 0)))
+
+@app.route('/api/player/selftest', method='POST')
+def api_player_selftest():
+    return _player_call(lambda: PlayerController.get().self_test())
+
+@app.route('/api/logs', method='GET')
+def api_logs():
+    from core import applog
+    return {"text": applog.text()}
+
+@app.route('/api/logs/client', method='POST')
+def api_logs_client():
+    from core import applog
+    data = request.json or {}
+    applog.add("js", str(data.get("msg") or ""))
+    return {"ok": True}
+
+@app.route('/api/logs/save', method='POST')
+def api_logs_save():
+    from core import applog
+    def save():
+        path = os.path.join(get_download_directory(), f"yasave-log-{time.strftime('%Y%m%d-%H%M%S')}.txt")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(applog.text())
+        logger.info(f"log saved to {path}")
+        return {"path": path}
+    return _player_call(save)
+
+@app.route('/api/logs/share', method='POST')
+def api_logs_share():
+    from core import applog, android_bridge
+    def share():
+        if not android_bridge.is_android():
+            raise RuntimeError("Поделиться можно только в Android-приложении")
+        return {"shared": android_bridge.share_text("YaSave: лог плеера", applog.text())}
+    return _player_call(share)
 
 @app.route('/api/system/status', method='GET')
 def api_system_status():

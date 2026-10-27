@@ -16,6 +16,9 @@ logging.basicConfig(
 for _noisy in ("urllib3", "yandex_music", "charset_normalizer"):
     logging.getLogger(_noisy).setLevel(logging.WARNING)
 
+from core import applog
+applog.install()  # last 200 lines, shown in Settings -> "Диагностика плеера"
+
 from server import start_server
 
 PORT = 58231
@@ -50,6 +53,9 @@ def is_port_in_use(port: int) -> bool:
 def run_app():
     # 1. Android native execution with p4a webview bootstrap
     if is_android():
+        # Must run on this (main) thread: worker threads cannot find app classes via JNI
+        from core import android_bridge
+        android_bridge.preload()
         request_android_permissions()
         # On Android with p4a webview bootstrap, native Java container
         # automatically connects to http://127.0.0.1:58231
