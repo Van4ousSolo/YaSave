@@ -8,14 +8,24 @@
   <!-- Favicon and PWA -->
   <link rel="icon" type="image/png" href="assets/icon.png">
   <link rel="apple-touch-icon" href="assets/icon.png">
-  <meta name="theme-color" content="#0b0f19">
+  <meta name="theme-color" content="#0a0c12">
+  <meta name="color-scheme" content="dark light">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 
-  <!-- Google Fonts: Outfit & Inter for ultra-crisp modern typography -->
+  <!-- Critical first paint: dark background + splash before any external CSS/fonts -->
+  <style>
+    html, body { background: #0a0c12; margin: 0; }
+    html[data-theme="light"], html[data-theme="light"] body { background: #eef3f9; }
+    .splash-screen { position: fixed; inset: 0; z-index: 9999; display: flex; align-items: center; justify-content: center; background: #0a0c12; }
+    html[data-theme="light"] .splash-screen { background: #eef3f9; }
+    .app-container { opacity: 0; }
+  </style>
+
+  <!-- Fonts load without blocking the first paint (system fonts until ready) -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Outfit:wght@500;600;700;800&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Outfit:wght@500;600;700;800&display=swap" rel="stylesheet" media="print" onload="this.media='all'">
 
   <!-- Immediate Zero-Flicker Session & Theme Hydration -->
   <script>
@@ -45,22 +55,16 @@
     <div class="glass-noise-overlay"></div>
   </div>
 
-  <!-- Minimalist Telegram / YouTube / Вкусно — и точка Style Splash Screen -->
+  <!-- Single splash screen. Visually identical to android/_load.html so the
+       native loader -> web splash hand-off is invisible. -->
   <div id="splash-screen" class="splash-screen">
     <div class="splash-minimal-content">
       <div class="splash-logo-container">
         <div class="splash-soft-glow"></div>
-        <img src="assets/icon.png" alt="YaSave Logo" class="splash-app-logo">
+        <img src="assets/icon.png" alt="" class="splash-app-logo">
       </div>
       <h1 class="splash-brand-title">YaSave</h1>
       <p class="splash-brand-subtitle">Музыка без границ</p>
-
-      <!-- Sleek 3-Dot Pulse Loader (Telegram Style) -->
-      <div class="splash-dots-loader">
-        <span class="dot dot-1"></span>
-        <span class="dot dot-2"></span>
-        <span class="dot dot-3"></span>
-      </div>
     </div>
   </div>
 
@@ -73,7 +77,10 @@
         <img src="assets/icon.png" alt="Icon" class="header-icon">
         <div class="header-titles">
           <span class="header-title">YaSave</span>
-          <span class="header-status-badge" id="header-user-status">Проверка...</span>
+          <span class="header-status-badge" id="header-user-status">
+            <svg class="status-icon hidden" id="header-plus-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l2.6 5.3 5.9.9-4.3 4.1 1 5.8L12 16.4l-5.2 2.7 1-5.8-4.3-4.1 5.9-.9z"></path></svg>
+            <span id="header-status-text">Проверка...</span>
+          </span>
         </div>
       </div>
       <div class="header-actions">
@@ -111,7 +118,7 @@
         <!-- Input Liquid Card -->
         <div class="liquid-card input-card">
           <div class="input-card-header">
-            <label for="track-url-input">Ссылка на трек Яндекс Музыки</label>
+            <label for="track-url-input">Ссылка или название трека</label>
             <button type="button" class="text-pill-btn" id="btn-paste-clipboard">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"></path><rect x="8" y="2" width="8" height="4" rx="1" ry="1"></rect></svg>
               Вставить
@@ -121,15 +128,20 @@
             <input 
               type="text" 
               id="track-url-input" 
-              placeholder="https://music.yandex.ru/album/.../track/..." 
-              autocomplete="off" 
+              placeholder="Ссылка или «артист — трек»"
+              autocomplete="off"
               spellcheck="false"
+              enterkeyhint="search"
             />
-            <button class="primary-btn search-btn" id="btn-fetch-track" title="Найти трек">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+            <button class="primary-btn search-btn" id="btn-fetch-track" title="Найти трек" aria-label="Найти трек">
+              <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+              <span class="btn-spinner" aria-hidden="true"></span>
             </button>
           </div>
         </div>
+
+        <!-- Yandex Music text search results -->
+        <div id="ym-search-results" class="liquid-card ym-results hidden"></div>
 
         <!-- Hero Track Card (Preview) -->
         <div id="track-hero-card" class="liquid-card track-card empty-state">
@@ -150,7 +162,7 @@
             <p class="track-artist" id="track-artist">Вставьте ссылку выше для скачивания</p>
             <div class="track-meta-row">
               <span class="meta-item" id="track-duration">--:--</span>
-              <span class="meta-dot">•</span>
+              <span class="meta-dot" aria-hidden="true"></span>
               <span class="meta-item" id="track-album">Альбом</span>
             </div>
           </div>
@@ -217,7 +229,7 @@
           </div>
           <div class="hero-text-wrap">
             <h3 class="hero-title">Поиск версий без цензуры</h3>
-            <p class="hero-desc">Поддержка SoundCloud, Spotify (Match) и YouTube с предпрослушиванием.</p>
+            <p class="hero-desc">Яндекс Музыка, YouTube, SoundCloud и Spotify — единая выдача с ранжированием.</p>
           </div>
         </div>
 
@@ -226,6 +238,10 @@
           <button type="button" class="source-pill active" data-source="all">
             <span class="pill-dot dot-all"></span>
             Все источники
+          </button>
+          <button type="button" class="source-pill" data-source="yandex">
+            <svg class="pill-icon icon-ym" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l12-2v13"></path><circle cx="6" cy="18" r="3"></circle><circle cx="18" cy="16" r="3"></circle></svg>
+            Яндекс Музыка
           </button>
           <button type="button" class="source-pill" data-source="soundcloud">
             <svg class="pill-icon icon-sc" viewBox="0 0 24 24" fill="currentColor"><path d="M11.56 8.87V17h1.41V9.56c-.44-.45-.92-.69-1.41-.69zm-2.82 1.63V17h1.41v-6.5zm-2.82 2.45V17h1.41v-4.05zm-2.82 1.63V17h1.41v-2.42zm11.28-7.34C13.88 5.61 13.06 4 11.5 4c-.7 0-1.34.33-1.84.88v3.31c.56-.25 1.18-.39 1.84-.39 1.43 0 2.65 1.05 2.9 2.44zM18 9c-.28 0-.55.03-.82.1.28.53.44 1.13.44 1.77 0 2.05-1.55 3.73-3.53 3.96V17H20c2.21 0 4-1.79 4-4s-1.79-4-4-4z"/></svg>
@@ -237,7 +253,7 @@
           </button>
           <button type="button" class="source-pill" data-source="youtube">
             <svg class="pill-icon icon-yt" viewBox="0 0 24 24" fill="currentColor"><path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/></svg>
-            YouTube Music
+            YouTube
           </button>
         </div>
 
@@ -246,14 +262,22 @@
           <div class="input-group">
             <input 
               type="text" 
-              id="alt-search-input" 
-              placeholder="Введите название трека или ссылку (Spotify / SoundCloud / YouTube)..." 
+              id="alt-search-input"
+              placeholder="Название трека или ссылка"
+              autocomplete="off"
+              spellcheck="false"
+              enterkeyhint="search"
             />
-            <button class="primary-btn search-btn" id="btn-trigger-alt-search" title="Искать">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+            <button class="primary-btn search-btn" id="btn-trigger-alt-search" title="Искать" aria-label="Искать">
+              <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+              <span class="btn-spinner" aria-hidden="true"></span>
             </button>
           </div>
+          <p class="search-context hidden" id="alt-search-context"></p>
         </div>
+
+        <!-- Per-source status (counts / errors) -->
+        <div id="alt-source-status" class="source-status-row hidden"></div>
 
         <!-- Alternatives Candidates List -->
         <div id="alt-results-list" class="cards-list">
@@ -300,37 +324,37 @@
           
           <div class="accent-palette-scroll" id="accent-palette-scroll">
             <button class="palette-swatch active" data-color="#FFCC00" style="--swatch-color: #FFCC00;" title="Яндекс Золото">
-              <span class="swatch-check">✓</span>
+              <svg class="swatch-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
             </button>
             <button class="palette-swatch" data-color="#FF5500" style="--swatch-color: #FF5500;" title="Неоновый Огонь">
-              <span class="swatch-check">✓</span>
+              <svg class="swatch-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
             </button>
             <button class="palette-swatch" data-color="#FF2D55" style="--swatch-color: #FF2D55;" title="Рубиновый Неон">
-              <span class="swatch-check">✓</span>
+              <svg class="swatch-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
             </button>
             <button class="palette-swatch" data-color="#FF2E93" style="--swatch-color: #FF2E93;" title="Радиант Роуз">
-              <span class="swatch-check">✓</span>
+              <svg class="swatch-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
             </button>
             <button class="palette-swatch" data-color="#B026FF" style="--swatch-color: #B026FF;" title="Синтвейв Пурпур">
-              <span class="swatch-check">✓</span>
+              <svg class="swatch-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
             </button>
             <button class="palette-swatch" data-color="#6366F1" style="--swatch-color: #6366F1;" title="Электрик Индиго">
-              <span class="swatch-check">✓</span>
+              <svg class="swatch-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
             </button>
             <button class="palette-swatch" data-color="#00A3FF" style="--swatch-color: #00A3FF;" title="Кибер Сапфир">
-              <span class="swatch-check">✓</span>
+              <svg class="swatch-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
             </button>
             <button class="palette-swatch" data-color="#00E5FF" style="--swatch-color: #00E5FF;" title="Лазурный Неон">
-              <span class="swatch-check">✓</span>
+              <svg class="swatch-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
             </button>
             <button class="palette-swatch" data-color="#00E575" style="--swatch-color: #00E575;" title="Изумрудный Неон">
-              <span class="swatch-check">✓</span>
+              <svg class="swatch-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
             </button>
             <button class="palette-swatch" data-color="#A3E635" style="--swatch-color: #A3E635;" title="Лайм Драйв">
-              <span class="swatch-check">✓</span>
+              <svg class="swatch-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
             </button>
             <button class="palette-swatch" data-color="#E2E8F0" style="--swatch-color: #E2E8F0;" title="Ледяная Платина">
-              <span class="swatch-check">✓</span>
+              <svg class="swatch-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
             </button>
 
             <!-- Custom Color Picker Swatch -->
@@ -369,10 +393,30 @@
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 2l-2 2m-1.5 1.5L16 7l-1.5-1.5L13 7l1.5 1.5L13 10l-1.5-1.5L10 10l1.5 1.5L9 14l-4 4v4h4l4-4 2.5-2.5"></path><circle cx="7.5" cy="7.5" r="2.5"></circle></svg>
               Ввести токен вручную
             </button>
-            <button class="liquid-button btn-glass-sm hidden" id="btn-auth-logout" style="color: #ff453a;">
+            <button class="liquid-button btn-glass-sm hidden" id="btn-auth-logout">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg>
               Выйти из аккаунта
             </button>
+          </div>
+        </div>
+
+        <!-- Spotify Match credentials -->
+        <div class="liquid-card settings-card">
+          <div>
+            <h4 class="settings-group-title">Spotify Match</h4>
+            <p class="settings-group-desc">
+              Работает сразу, без ключей: точные метаданные и пометка Explicit из Spotify, аудио подбирается на YouTube по длительности.
+              Если Spotify недоступен, данные берутся из Deezer или iTunes.
+              Свои ключи необязательны (developer.spotify.com → Dashboard → Create app) и имеют приоритет над встроенными. Очистите поля и нажмите «Сохранить», чтобы вернуть встроенные.
+            </p>
+          </div>
+          <div class="settings-inputs">
+            <input type="text" id="spotify-client-id" class="glass-input" placeholder="Client ID (необязательно)" autocomplete="off" spellcheck="false">
+            <input type="password" id="spotify-client-secret" class="glass-input" placeholder="Client Secret (необязательно)" autocomplete="off" spellcheck="false">
+          </div>
+          <div class="settings-inline-row">
+            <span class="settings-chip" id="spotify-status">Встроенные ключи</span>
+            <button class="liquid-button btn-glass-sm" id="btn-save-spotify">Сохранить</button>
           </div>
         </div>
 
@@ -439,7 +483,7 @@
     <div class="liquid-card modal-card">
       <div class="modal-header">
         <h3 class="modal-title">Вход через ya.ru/device</h3>
-        <button class="modal-close-btn" data-close-modal="modal-device-auth">&times;</button>
+        <button class="modal-close-btn" data-close-modal="modal-device-auth"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg></button>
       </div>
       <p class="modal-instruction">
         1. Откройте в браузере сайт <strong>ya.ru/device</strong><br>
@@ -471,7 +515,7 @@
     <div class="liquid-card modal-card">
       <div class="modal-header">
         <h3 class="modal-title">Ручной ввод токена</h3>
-        <button class="modal-close-btn" data-close-modal="modal-manual-auth">&times;</button>
+        <button class="modal-close-btn" data-close-modal="modal-manual-auth"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg></button>
       </div>
       <p class="modal-instruction">
         Вставьте ваш OAuth токен Яндекс Музыки (начинается с <code>y0_...</code> или <code>AQAAAA...</code>):

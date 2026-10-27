@@ -51,6 +51,37 @@ jobs:
           pip install --upgrade pip
           pip install "buildozer>=1.5.0" "cython<3.0" virtualenv
 
+      # SDK / NDK / p4a builds: saves ~20+ minutes on repeat runs.
+      # Full hit when buildozer.spec is unchanged; otherwise the latest cache is reused.
+      - name: Cache Buildozer
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.buildozer
+            .buildozer
+          key: buildozer-${{ runner.os }}-${{ hashFiles('buildozer.spec') }}
+          restore-keys: |
+            buildozer-${{ runner.os }}-
+
+      # Permanent debug key: every build is signed the same way, so the app updates
+      # on the phone without uninstalling. Without the secret Gradle creates a random key.
+      - name: Restore debug keystore
+        env:
+          DEBUG_KEYSTORE_B64: ${{ secrets.DEBUG_KEYSTORE_B64 }}
+        run: |
+          if [ -z "$DEBUG_KEYSTORE_B64" ]; then
+            echo "::warning title=Debug keystore::Secret DEBUG_KEYSTORE_B64 is not set. The APK will be signed with a random key and will not install over the previous version."
+            exit 0
+          fi
+          mkdir -p ~/.android
+          echo "$DEBUG_KEYSTORE_B64" | base64 --decode > ~/.android/debug.keystore
+          chmod 600 ~/.android/debug.keystore
+          if command -v keytool >/dev/null 2>&1 && keytool -list -keystore ~/.android/debug.keystore -storepass android -alias androiddebugkey >/dev/null 2>&1; then
+            echo "Debug keystore restored (alias androiddebugkey)."
+          else
+            echo "::warning title=Debug keystore::Keystore restored, but alias 'androiddebugkey' with password 'android' was not found. Gradle may fail to sign the APK."
+          fi
+
       - name: Build APK with Buildozer
         run: |
           buildozer -v android debug || { echo "=== BUILDOZER LOG DUMP ==="; tail -n 200 .buildozer/buildozer.log 2>/dev/null; exit 1; }

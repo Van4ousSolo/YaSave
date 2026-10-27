@@ -34,8 +34,15 @@ requirements = python3,bottle,requests,urllib3,certifi,charset-normalizer,idna,P
 p4a.bootstrap = webview
 p4a.port = 58231
 
-# (str) Presplash of the application
-presplash.filename = %(source.dir)s/assets/cover.jpg
+# (str) Presplash of the application (shown on top of presplash_color while Python boots)
+presplash.filename = %(source.dir)s/assets/presplash.png
+
+# (str) Presplash background color: same dark tone as the web splash, no white flash
+android.presplash_color = #0a0c12
+
+# (list) Extra APK assets. Overrides the default p4a webview loader page
+# (white screen with purple bars) with a dark one identical to the app splash.
+android.add_assets = android/_load.html:_load.html,assets/icon.png:_yasave_icon.png
 
 # (str) Icon of the application
 icon.filename = %(source.dir)s/assets/icon.png

@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>YaSave</title>
+  <!--
+    Replaces the default python-for-android webview loader (white page with
+    purple bars). Shown while the local Python server starts. Must look exactly
+    like the splash in web/index.html so the hand-off is invisible.
+  -->
+  <style>
+    html, body {
+      margin: 0;
+      height: 100%;
+      background: #0a0c12;
+      overflow: hidden;
+    }
+    body {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      color: #fff;
+    }
+    .splash { display: flex; flex-direction: column; align-items: center; text-align: center; }
+    .logo-wrap { position: relative; width: 96px; height: 96px; margin-bottom: 20px; display: flex; align-items: center; justify-content: center; }
+    .glow {
+      position: absolute; width: 150px; height: 150px; border-radius: 50%;
+      background: radial-gradient(circle, rgba(255, 204, 0, 0.42) 0%, transparent 70%);
+      filter: blur(16px);
+      animation: pulse 2.4s ease-in-out infinite alternate;
+    }
+    .logo {
+      position: relative; width: 96px; height: 96px; border-radius: 24px; object-fit: cover;
+      box-shadow: 0 16px 36px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(255, 255, 255, 0.14);
+    }
+    h1 { margin: 0 0 4px; font-size: 32px; font-weight: 700; letter-spacing: -0.4px; }
+    p { margin: 0; font-size: 13px; font-weight: 500; color: rgba(255, 255, 255, 0.68); letter-spacing: 0.3px; }
+    @keyframes pulse { from { transform: scale(0.9); opacity: 0.45; } to { transform: scale(1.25); opacity: 0.8; } }
+  </style>
+</head>
+<body>
+  <div class="splash">
+    <div class="logo-wrap">
+      <div class="glow"></div>
+      <img class="logo" src="_yasave_icon.png" alt="">
+    </div>
+    <h1>YaSave</h1>
+    <p>Музыка без границ</p>
+  </div>
+</body>
+</html>

@@ -44,7 +44,9 @@ class ConfigManager:
             "theme": "dark",
             "accent_color": "#FFCC00",
             "bitrate": 320,
-            "download_dir": ""
+            "download_dir": "",
+            "spotify_client_id": "",
+            "spotify_client_secret": ""
         }
         self.load()
 
@@ -104,6 +106,19 @@ class ConfigManager:
     @download_dir.setter
     def download_dir(self, value: str):
         self.data["download_dir"] = value
+        self.save()
+
+    @property
+    def spotify_client_id(self) -> str:
+        return (self.data.get("spotify_client_id") or "").strip()
+
+    @property
+    def spotify_client_secret(self) -> str:
+        return (self.data.get("spotify_client_secret") or "").strip()
+
+    def set_spotify_credentials(self, client_id: str, client_secret: str):
+        self.data["spotify_client_id"] = (client_id or "").strip()
+        self.data["spotify_client_secret"] = (client_secret or "").strip()
         self.save()
 
     @property

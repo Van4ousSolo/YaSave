@@ -26,3 +26,8 @@ dist/
 .idea/
 .DS_Store
 Thumbs.db
+
+# Signing keys (never commit)
+*.keystore
+*.jks
+*.keystore.b64

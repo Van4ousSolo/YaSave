@@ -166,7 +166,9 @@ def api_status():
         "has_plus": has_plus,
         "theme": config.theme,
         "accent_color": config.accent_color,
-        "download_dir": get_download_directory()
+        "download_dir": get_download_directory(),
+        "spotify_configured": bool(config.spotify_client_id and config.spotify_client_secret),
+        "spotify_client_id": config.spotify_client_id
     }
 
 @app.route('/api/track_info', method='POST')
@@ -201,6 +203,7 @@ def api_download_ym():
     data = request.json or {}
     track_info = data.get("track_info")
     if not track_info:
+        reset_download_state()
         response.status = 400
         return {"error": "Данные трека не переданы"}
 
@@ -239,19 +242,38 @@ def api_download_ym():
     thread.start()
     return {"status": "started"}
 
+@app.route('/api/ym_search', method='POST')
+def api_ym_search():
+    data = request.json or {}
+    query = (data.get("query") or "").strip()
+    if not query:
+        response.status = 400
+        return {"error": "Введите запрос"}
+    try:
+        tracks = YandexDownloader().search_tracks(query, limit=20)
+        return {"tracks": tracks}
+    except Exception as e:
+        response.status = 500
+        return {"error": str(e)}
+
 @app.route('/api/search_uncensored', method='POST')
 def api_search_uncensored():
     data = request.json or {}
-    artist = data.get("artist", "").strip()
-    title = data.get("title", "").strip()
-    source = data.get("source", "all").strip().lower()
-    if not title:
+    query = (data.get("query") or "").strip()
+    if not query:
+        # Backward compatibility with {artist, title}
+        query = f"{data.get('artist', '')} {data.get('title', '')}".strip()
+    source = (data.get("source") or "all").strip().lower()
+    try:
+        ref_duration = int(data.get("ref_duration") or 0)
+    except (TypeError, ValueError):
+        ref_duration = 0
+    if not query:
         response.status = 400
-        return {"error": "Название трека обязательно для поиска"}
+        return {"error": "Введите запрос для поиска"}
 
     try:
-        candidates = AlternativeSourcesManager.search_candidates(artist, title, source=source, limit_per_source=4)
-        return {"candidates": candidates}
+        return AlternativeSourcesManager.search_candidates(query, source=source, ref_duration=ref_duration)
     except Exception as e:
         response.status = 500
         return {"error": str(e)}
@@ -259,17 +281,50 @@ def api_search_uncensored():
 @app.route('/api/get_preview_url', method='POST')
 def api_get_preview():
     data = request.json or {}
-    url = data.get("url", "")
-    if not url:
+    candidate = data.get("candidate") or ({"url": data["url"]} if data.get("url") else None)
+    if not candidate:
         response.status = 400
-        return {"error": "URL обязателен"}
+        return {"error": "Не передан трек для предпрослушивания"}
 
     try:
-        preview_url = AlternativeSourcesManager.get_preview_audio_url(url)
+        preview_url = AlternativeSourcesManager.get_preview_audio_url(candidate)
+        if not preview_url:
+            raise RuntimeError("Не удалось получить аудиопоток")
         return {"preview_url": preview_url}
     except Exception as e:
         response.status = 500
         return {"error": str(e)}
+
+@app.route('/api/spotify_credentials', method='POST')
+def api_spotify_credentials():
+    from core.alt_sources import SpotifyClient
+    data = request.json or {}
+    cfg = ConfigManager.get_instance()
+    new_id = (data.get("client_id") or "").strip()
+    new_secret = (data.get("client_secret") or "").strip()
+    old_id, old_secret = cfg.spotify_client_id, cfg.spotify_client_secret
+
+    # Same ID with the (hidden) secret left blank: keep the saved keys
+    if new_id and not new_secret and new_id == old_id and old_secret:
+        return {"success": True, "configured": True}
+
+    # Empty fields = back to the built-in keys
+    if not (new_id and new_secret):
+        cfg.set_spotify_credentials("", "")
+        SpotifyClient.reset()
+        return {"success": True, "configured": False}
+
+    # User keys are saved only if Spotify accepts them
+    cfg.set_spotify_credentials(new_id, new_secret)
+    SpotifyClient.reset()
+    try:
+        SpotifyClient.get_token()
+        return {"success": True, "configured": True}
+    except Exception as e:
+        cfg.set_spotify_credentials(old_id, old_secret)
+        SpotifyClient.reset()
+        response.status = 400
+        return {"success": False, "configured": bool(old_id and old_secret), "error": str(e)}
 
 @app.route('/api/download_alternative', method='POST')
 def api_download_alt():
@@ -283,8 +338,9 @@ def api_download_alt():
 
     data = request.json or {}
     candidate = data.get("candidate")
-    ym_track = data.get("ym_track")
-    if not candidate or not ym_track:
+    ym_track = data.get("ym_track")  # optional: original Yandex track tags
+    if not candidate:
+        reset_download_state()
         response.status = 400
         return {"error": "Не переданы параметры для скачивания"}
 

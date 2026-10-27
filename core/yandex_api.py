@@ -58,6 +58,72 @@ class YandexDownloader:
         self.client = Client(tok)
         return self.client
 
+    def _search_client(self) -> Client:
+        """Catalog search works anonymously too; use the token when available."""
+        if self.client:
+            return self.client
+        tok = self.config.token
+        return Client(tok) if tok else Client()
+
+    @staticmethod
+    def _cover(uri: Optional[str], size: str) -> Optional[str]:
+        return f"https://{uri.replace('%%', size)}" if uri else None
+
+    def search_tracks(self, query: str, limit: int = 20) -> List[Dict[str, Any]]:
+        client = self._search_client()
+        try:
+            result = client.search(query, type_='track', nocorrect=False)
+        except Exception as e:
+            msg = str(e)
+            if "451" in msg or "Legal Reasons" in msg:
+                raise RuntimeError(
+                    "Каталог недоступен в этом регионе без входа. Авторизуйтесь в Настройках или отключите VPN."
+                ) from e
+            if "401" in msg or "Unauthorized" in msg:
+                raise RuntimeError("Токен Яндекс Музыки недействителен. Войдите заново.") from e
+            raise
+        if not result or not result.tracks or not result.tracks.results:
+            return []
+        out = []
+        for track in result.tracks.results[:limit]:
+            if not track or not track.id:
+                continue
+            if track.available is False:
+                continue
+            title = track.title or "Без названия"
+            if track.version:
+                title = f"{title} ({track.version})"
+            artists = ", ".join(a.name for a in (track.artists or []) if a.name) or "Неизвестный исполнитель"
+            album = track.albums[0] if track.albums else None
+            dur = (track.duration_ms or 0) // 1000
+            cover_uri = track.cover_uri or (album.cover_uri if album else None) or track.og_image
+            album_id = album.id if album else None
+            out.append({
+                "id": str(track.id),
+                "title": title,
+                "artist": artists,
+                "album": album.title if album else None,
+                "year": str(album.year) if album and album.year else None,
+                "duration": dur,
+                "duration_str": f"{dur // 60}:{dur % 60:02d}",
+                "explicit": track.content_warning == 'explicit',
+                "thumb_url": self._cover(cover_uri, "200x200"),
+                "url": f"https://music.yandex.ru/album/{album_id}/track/{track.id}" if album_id else f"https://music.yandex.ru/track/{track.id}",
+            })
+        return out
+
+    def get_stream_url(self, track_id: str, preview: bool = False) -> str:
+        """Direct mp3 link. For preview the lowest mp3 bitrate is used to start faster."""
+        client = self.ensure_client()
+        tracks = client.tracks([track_id])
+        if not tracks:
+            raise ValueError("Трек не найден")
+        infos = [i for i in tracks[0].get_download_info() if i.codec == 'mp3'] or tracks[0].get_download_info()
+        if not infos:
+            raise RuntimeError("Нет доступных аудиопотоков")
+        infos.sort(key=lambda i: i.bitrate_in_kbps or 0, reverse=not preview)
+        return infos[0].get_direct_link()
+
     def get_track_info(self, track_id: str) -> Dict[str, Any]:
         client = self.ensure_client()
         tracks = client.tracks([track_id])
