@@ -88,6 +88,10 @@ jobs:
       - name: Drop stale p4a pip venv
         run: rm -rf .buildozer/android/platform/build-*/build/venv
 
+      # Manifest-only .aar that declares the media playback service (see buildozer.spec)
+      - name: Build media AAR
+        run: python tools/make_media_aar.py
+
       - name: Build APK with Buildozer
         run: |
           buildozer -v android debug || { echo "=== BUILDOZER LOG DUMP ==="; tail -n 200 .buildozer/buildozer.log 2>/dev/null; exit 1; }

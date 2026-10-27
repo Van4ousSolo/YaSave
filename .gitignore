@@ -34,3 +34,6 @@ Thumbs.db
 
 # Local runtime cache (yt-dlp, covers)
 cache/
+
+# Generated in CI by tools/make_media_aar.py
+android/build/

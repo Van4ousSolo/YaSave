@@ -4,6 +4,18 @@ import time
 import socket
 import threading
 import webbrowser
+import logging
+
+# On Android stdout goes to logcat (tag "python"); every line starts with "YaSave"
+# so it can be filtered:  adb logcat | findstr YaSave
+logging.basicConfig(
+    level=logging.INFO,
+    format="YaSave %(levelname)s [%(name)s] %(message)s",
+    stream=sys.stdout,
+)
+for _noisy in ("urllib3", "yandex_music", "charset_normalizer"):
+    logging.getLogger(_noisy).setLevel(logging.WARNING)
+
 from server import start_server
 
 PORT = 58231

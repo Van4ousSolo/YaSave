@@ -15,7 +15,7 @@ source.dir = .
 # (list) Source files to include (let empty to include all the files)
 source.include_exts = py,png,jpg,kv,atlas,json,html,css,js,svg,ttf,woff,woff2
 # Not app code: CI config, local caches, native sources (added via add_src / add_assets)
-source.exclude_dirs = .github,cache,android,bin,.venv,venv
+source.exclude_dirs = .github,cache,android,bin,.venv,venv,tools
 
 # (list) List of inclusions using pattern matching (commented out to include all files recursively matching include_exts)
 # source.include_patterns = assets/*,core/*,web/*
@@ -47,8 +47,12 @@ android.presplash_color = #0a0c12
 # (list) Extra APK assets. Overrides the default p4a webview loader page
 # (white screen with purple bars) with a dark one identical to the app splash.
 android.add_assets = android/_load.html:_load.html,assets/icon.png:_yasave_icon.png
-# Java sources compiled into the APK (MediaSession / notification player)
+# Native player: Java sources (MediaSession, MediaStyle notification, foreground service)
 android.add_src = android/src
+# Manifest-only .aar that declares YaSaveMediaService (built by tools/make_media_aar.py in CI).
+# p4a puts .aar files into libs/ and references them by name, so Gradle needs a flatDir repo.
+android.add_aars = android/build/yasave-media.aar
+android.add_gradle_repositories = flatDir { dirs 'libs' }
 
 # (str) Icon of the application
 icon.filename = %(source.dir)s/assets/icon.png
@@ -57,8 +61,9 @@ icon.filename = %(source.dir)s/assets/icon.png
 orientation = portrait
 
 # (list) Permissions
-# FOREGROUND_SERVICE* + POST_NOTIFICATIONS + WAKE_LOCK: player in the notification shade / lock screen
-android.permissions = INTERNET,WRITE_EXTERNAL_STORAGE,READ_EXTERNAL_STORAGE,MANAGE_EXTERNAL_STORAGE,FOREGROUND_SERVICE,FOREGROUND_SERVICE_MEDIA_PLAYBACK,POST_NOTIFICATIONS,WAKE_LOCK
+# FOREGROUND_SERVICE* + POST_NOTIFICATIONS + WAKE_LOCK: player in the shade / lock screen;
+# REQUEST_IGNORE_BATTERY_OPTIMIZATIONS: "allow background" button for aggressive OEMs (vivo)
+android.permissions = INTERNET,WRITE_EXTERNAL_STORAGE,READ_EXTERNAL_STORAGE,MANAGE_EXTERNAL_STORAGE,FOREGROUND_SERVICE,FOREGROUND_SERVICE_MEDIA_PLAYBACK,POST_NOTIFICATIONS,WAKE_LOCK,REQUEST_IGNORE_BATTERY_OPTIMIZATIONS
 
 # (int) Target Android API, should be as high as possible.
 android.api = 34
@@ -87,8 +92,6 @@ android.allow_backup = True
 
 # (list) List of service to declare
 #services = NAME:ENTRYPOINT_TO_PY,NAME2:ENTRYPOINT2_TO_PY
-# Playback service (own process). Starts foreground itself with a MediaStyle notification.
-services = Player:service/player.py:foregroundServiceType=mediaPlayback
 
 [buildozer]
 

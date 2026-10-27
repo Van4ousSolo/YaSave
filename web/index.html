@@ -423,6 +423,52 @@
           </div>
         </div>
 
+        <!-- Background playback (Origin OS / Funtouch kill background apps aggressively) -->
+        <div class="liquid-card settings-card" id="bg-card">
+          <div>
+            <h4 class="settings-group-title">Чтобы плеер работал в фоне</h4>
+            <p class="settings-group-desc">Плеер в шторке и на экране блокировки работает, только если система разрешает уведомления и не закрывает приложение. На vivo (Origin OS) это нужно включить вручную.</p>
+          </div>
+          <div class="bg-steps" id="bg-steps">
+            <div class="bg-step" data-check="notifications">
+              <span class="bg-step-dot"></span>
+              <span class="bg-step-text"><b>Уведомления</b><small>Разрешить уведомления YaSave</small></span>
+              <button type="button" class="liquid-button btn-glass-sm bg-step-btn" data-open="permission">Разрешить</button>
+            </div>
+            <div class="bg-step" data-check="battery">
+              <span class="bg-step-dot"></span>
+              <span class="bg-step-text"><b>Батарея</b><small>Без ограничений фоновой работы</small></span>
+              <button type="button" class="liquid-button btn-glass-sm bg-step-btn" data-open="battery">Открыть</button>
+            </div>
+            <div class="bg-step" data-check="autostart">
+              <span class="bg-step-dot is-manual"></span>
+              <span class="bg-step-text"><b>Автозапуск и фон (vivo)</b><small>i Manager → Приложения → Автозапуск: включить YaSave</small></span>
+              <button type="button" class="liquid-button btn-glass-sm bg-step-btn" data-open="autostart">Открыть</button>
+            </div>
+            <div class="bg-step" data-check="recents">
+              <span class="bg-step-dot is-manual"></span>
+              <span class="bg-step-text"><b>Закрепить в недавних</b><small>Откройте список приложений, потяните карточку YaSave вниз (замок)</small></span>
+            </div>
+          </div>
+          <div class="settings-inline-row">
+            <span class="settings-chip" id="bg-player-status">Проверка…</span>
+            <button type="button" class="liquid-button btn-glass-sm" id="btn-bg-refresh">Обновить</button>
+          </div>
+        </div>
+
+        <!-- Yandex quality check -->
+        <div class="liquid-card settings-card">
+          <div>
+            <h4 class="settings-group-title">Качество Яндекс Музыки</h4>
+            <p class="settings-group-desc">Показывает все варианты файла, которые Яндекс вернул для выбранного во вкладке «Скачать» трека, и данные аккаунта.</p>
+          </div>
+          <button class="liquid-button btn-glass-sm" id="btn-quality-report">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l12-2v13"></path><circle cx="6" cy="18" r="3"></circle><circle cx="18" cy="16" r="3"></circle></svg>
+            <span>Проверить доступное качество</span>
+          </button>
+          <div id="quality-report-output" class="diag-output hidden"></div>
+        </div>
+
         <!-- Source diagnostics -->
         <div class="liquid-card settings-card">
           <div>
@@ -478,6 +524,9 @@
         <span class="mini-title" id="mini-title">—</span>
         <span class="mini-artist" id="mini-artist"></span>
       </span>
+    </button>
+    <button type="button" class="mini-btn" id="mini-prev" aria-label="Предыдущий трек">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="19 20 9 12 19 4 19 20"></polygon><line x1="5" y1="19" x2="5" y2="5"></line></svg>
     </button>
     <button type="button" class="mini-btn" id="mini-toggle" aria-label="Пауза">
       <span class="mini-btn-icon"></span>

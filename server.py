@@ -331,6 +331,20 @@ def api_player_step():
     data = request.json or {}
     return _player_call(lambda: PlayerController.get().step(int(data.get("dir") or 1), bool(data.get("auto"))))
 
+@app.route('/api/player/previous', method='POST')
+def api_player_previous():
+    data = request.json or {}
+    return _player_call(lambda: PlayerController.get().previous(float(data.get("position") or 0)))
+
+@app.route('/api/system/status', method='GET')
+def api_system_status():
+    return _player_call(lambda: PlayerController.get().system_status())
+
+@app.route('/api/system/open', method='POST')
+def api_system_open():
+    data = request.json or {}
+    return _player_call(lambda: PlayerController.get().open_settings(str(data.get("which") or "app")))
+
 @app.route('/api/player/command', method='POST')
 def api_player_command():
     data = request.json or {}
@@ -356,6 +370,15 @@ def api_player_art():
         response.status = 404
         return {"error": "Нет обложки"}
     return static_file(os.path.basename(cover), root=os.path.dirname(cover), mimetype="image/jpeg")
+
+@app.route('/api/quality_report', method='POST')
+def api_quality_report():
+    data = request.json or {}
+    track_id = YandexParser.extract_track_id(str(data.get("track_id") or data.get("url") or ""))
+    if not track_id:
+        response.status = 400
+        return {"error": "Сначала выберите трек во вкладке «Скачать»"}
+    return _player_call(lambda: YandexDownloader().quality_report(track_id))
 
 @app.route('/api/diagnostics', method='GET')
 def api_diagnostics():
@@ -526,12 +549,12 @@ def api_history():
     items = []
     if os.path.exists(folder):
         for f in os.listdir(folder):
-            if f.lower().endswith(".mp3"):
+            if f.lower().endswith((".mp3", ".flac", ".m4a")) and not f.startswith("yasave_tmp_"):
                 full_path = os.path.join(folder, f)
                 stat = os.stat(full_path)
                 size_mb = round(stat.st_size / (1024 * 1024), 2)
                 # Parse artist and title from filename
-                name_part = f[:-4]
+                name_part = os.path.splitext(f)[0]
                 parts = name_part.split(" - ", 1)
                 artist = parts[0] if len(parts) > 1 else ""
                 title = parts[1] if len(parts) > 1 else name_part

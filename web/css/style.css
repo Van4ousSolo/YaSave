@@ -3002,3 +3002,77 @@ body.kb-open .mini-player {
   .screen-tab.active { animation: none !important; }
   .player-sheet-panel, .mini-player, .liquid-nav-bar, .nav-indicator { transition-duration: 0.01s !important; }
 }
+
+/* ================= v3.1: background playback steps ================= */
+.bg-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.bg-step {
+  display: grid;
+  grid-template-columns: 10px 1fr auto;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 10px 10px 12px;
+  border-radius: var(--r-sm);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.bg-step-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--text-muted);
+}
+
+.bg-step.is-ok .bg-step-dot {
+  background: var(--success);
+  box-shadow: 0 0 8px rgba(0, 229, 117, 0.5);
+}
+
+.bg-step.is-bad .bg-step-dot {
+  background: var(--danger);
+  box-shadow: 0 0 8px rgba(255, 69, 58, 0.5);
+}
+
+.bg-step-dot.is-manual {
+  background: transparent;
+  border: 1.5px solid var(--text-muted);
+}
+
+.bg-step-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  font-size: 13px;
+}
+
+.bg-step-text small {
+  font-size: 11.5px;
+  color: var(--text-muted);
+  line-height: 1.35;
+}
+
+.liquid-button.bg-step-btn {
+  width: auto;
+  height: 34px;
+  padding: 0 12px;
+  font-size: 12px;
+}
+
+.bg-step.is-ok .bg-step-btn {
+  opacity: 0.55;
+}
+
+#bg-player-status {
+  white-space: normal;
+  line-height: 1.35;
+}
+
+/* mini player now has 3 buttons */
+.mini-player .mini-btn {
+  width: 38px;
+}

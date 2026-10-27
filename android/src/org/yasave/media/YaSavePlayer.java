@@ -1,5 +1,6 @@
 package org.yasave.media;
 
+import android.app.Activity;
 import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
@@ -19,10 +20,12 @@ import android.media.MediaMetadata;
 import android.media.MediaPlayer;
 import android.media.session.MediaSession;
 import android.media.session.PlaybackState;
+import android.net.Uri;
 import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.PowerManager;
+import android.provider.Settings;
 import android.util.Log;
 
 import java.io.InputStream;
@@ -31,17 +34,20 @@ import java.net.URL;
 import java.util.concurrent.ConcurrentLinkedQueue;
 
 /**
- * Native audio player for YaSave, running inside the p4a "Player" service process.
+ * Native audio player for YaSave (main app process).
  *
- * MediaPlayer + MediaSession (lock screen / shade controls) + MediaStyle notification.
- * Python (service/player.py) calls the public methods from any thread; all work is
- * posted to the main looper. Commands that need the app (next / prev / ended) are
- * queued and picked up by Python through pollCommand().
+ * MediaPlayer + MediaSession (shade / lock screen controls) + MediaStyle notification,
+ * kept alive by YaSaveMediaService (foreground, type mediaPlayback).
+ * Python (core/player.py) calls the public methods through pyjnius from any thread;
+ * work is posted to the main looper. next / prev / ended are queued for Python
+ * (pollCommand), which owns the queue and resolves stream URLs.
+ * Every step logs with tag "YaSave":  adb logcat -s YaSave
  */
 public final class YaSavePlayer {
-    private static final String TAG = "YaSavePlayer";
+    private static final String TAG = "YaSave";
     private static final String CHANNEL_ID = "yasave_playback";
     private static final int NOTIFICATION_ID = 7301;
+    private static final long PREV_RESTART_MS = 3000;
 
     private static final String ACTION_TOGGLE = "org.yasave.media.TOGGLE";
     private static final String ACTION_NEXT = "org.yasave.media.NEXT";
@@ -50,7 +56,6 @@ public final class YaSavePlayer {
 
     private static YaSavePlayer sInstance;
 
-    private final Service service;
     private final Context ctx;
     private final Handler main;
     private final NotificationManager notifications;
@@ -61,11 +66,14 @@ public final class YaSavePlayer {
     private MediaSession session;
     private AudioFocusRequest focusRequest;
     private BroadcastReceiver receiver;
+    private Service service;
+    private boolean serviceRequested = false;
     private boolean foreground = false;
 
     // State shared with Python (read from other threads)
     private volatile String state = "idle";       // idle | buffering | playing | paused | ended | error
     private volatile String error = "";
+    private volatile String notifError = "";
     private volatile String title = "";
     private volatile String artist = "";
     private volatile long durationMs = 0;
@@ -73,7 +81,7 @@ public final class YaSavePlayer {
     private volatile long positionAt = 0;
     private volatile boolean hasPrev = false;
     private volatile boolean hasNext = false;
-    private volatile int seq = 0;                  // bumps on every new track
+    private volatile int seq = 0;
     private volatile Bitmap cover;
     private volatile boolean resumeOnFocusGain = false;
 
@@ -91,16 +99,50 @@ public final class YaSavePlayer {
         }
     };
 
-    public static synchronized YaSavePlayer get(Service service) {
+    // ------------------------------------------------------------------
+    // Singleton / service glue
+    // ------------------------------------------------------------------
+
+    public static synchronized YaSavePlayer get(Context any) {
         if (sInstance == null) {
-            sInstance = new YaSavePlayer(service);
+            Log.i(TAG, "player: create (sdk " + Build.VERSION.SDK_INT + ", " + Build.MANUFACTURER + ")");
+            sInstance = new YaSavePlayer(any.getApplicationContext());
         }
         return sInstance;
     }
 
-    private YaSavePlayer(Service service) {
-        this.service = service;
-        this.ctx = service.getApplicationContext();
+    static synchronized void attachService(Service s) {
+        YaSavePlayer p = sInstance;
+        if (p == null) {
+            // Should not happen; still satisfy the startForeground() contract.
+            Log.w(TAG, "service started without player, stopping");
+            p = get(s);
+        }
+        p.onServiceAttached(s);
+    }
+
+    static synchronized void detachService(Service s) {
+        if (sInstance != null && sInstance.service == s) {
+            sInstance.service = null;
+            sInstance.foreground = false;
+            sInstance.serviceRequested = false;
+        }
+    }
+
+    static void onTaskRemoved() {
+        final YaSavePlayer p = sInstance;
+        if (p != null && !"playing".equals(p.state) && !"buffering".equals(p.state)) {
+            p.main.post(new Runnable() {
+                @Override
+                public void run() {
+                    p.doStop();
+                }
+            });
+        }
+    }
+
+    private YaSavePlayer(Context appCtx) {
+        this.ctx = appCtx;
         this.main = new Handler(Looper.getMainLooper());
         this.notifications = (NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
         this.audio = (AudioManager) ctx.getSystemService(Context.AUDIO_SERVICE);
@@ -119,6 +161,7 @@ public final class YaSavePlayer {
     public void play(final String url, final String newTitle, final String newArtist,
                      final String coverRef, final long durationHintMs,
                      final boolean prev, final boolean next) {
+        Log.i(TAG, "play: '" + newTitle + "' prev=" + prev + " next=" + next);
         seq++;
         title = newTitle != null ? newTitle : "";
         artist = newArtist != null ? newArtist : "";
@@ -135,6 +178,7 @@ public final class YaSavePlayer {
         main.post(new Runnable() {
             @Override
             public void run() {
+                ensureService();
                 startPlayback(url, mySeq);
             }
         });
@@ -143,7 +187,7 @@ public final class YaSavePlayer {
     public void setNavigation(boolean prev, boolean next) {
         hasPrev = prev;
         hasNext = next;
-        main.post(new Runnable() {
+        post(new Runnable() {
             @Override
             public void run() {
                 publish();
@@ -152,7 +196,7 @@ public final class YaSavePlayer {
     }
 
     public void pause() {
-        main.post(new Runnable() {
+        post(new Runnable() {
             @Override
             public void run() {
                 doPause();
@@ -161,7 +205,7 @@ public final class YaSavePlayer {
     }
 
     public void resume() {
-        main.post(new Runnable() {
+        post(new Runnable() {
             @Override
             public void run() {
                 doResume();
@@ -170,20 +214,16 @@ public final class YaSavePlayer {
     }
 
     public void toggle() {
-        main.post(new Runnable() {
+        post(new Runnable() {
             @Override
             public void run() {
-                if ("playing".equals(state)) {
-                    doPause();
-                } else {
-                    doResume();
-                }
+                doToggle();
             }
         });
     }
 
     public void seekTo(final long ms) {
-        main.post(new Runnable() {
+        post(new Runnable() {
             @Override
             public void run() {
                 doSeek(ms);
@@ -191,8 +231,18 @@ public final class YaSavePlayer {
         });
     }
 
+    /** Same rule as the in-app button: restart if played > 3 s or first track, else previous. */
+    public void previous() {
+        post(new Runnable() {
+            @Override
+            public void run() {
+                onPrevPressed();
+            }
+        });
+    }
+
     public void stop() {
-        main.post(new Runnable() {
+        post(new Runnable() {
             @Override
             public void run() {
                 doStop();
@@ -206,13 +256,7 @@ public final class YaSavePlayer {
     }
 
     public String getStateJson() {
-        long pos = positionMs;
-        if ("playing".equals(state) && positionAt > 0) {
-            pos += System.currentTimeMillis() - positionAt;
-        }
-        if (durationMs > 0 && pos > durationMs) {
-            pos = durationMs;
-        }
+        long pos = currentPosition();
         return "{\"state\":\"" + state + "\""
                 + ",\"position_ms\":" + pos
                 + ",\"duration_ms\":" + durationMs
@@ -220,26 +264,116 @@ public final class YaSavePlayer {
                 + ",\"has_prev\":" + hasPrev
                 + ",\"has_next\":" + hasNext
                 + ",\"foreground\":" + foreground
+                + ",\"service\":" + (service != null)
                 + ",\"error\":\"" + escape(error) + "\""
+                + ",\"notification_error\":\"" + escape(notifError) + "\""
                 + ",\"title\":\"" + escape(title) + "\"}";
+    }
+
+    // ------------------------------------------------------------------
+    // System status / settings shortcuts (for the "background playback" screen)
+    // ------------------------------------------------------------------
+
+    public static String systemStatus(Context any) {
+        Context c = any.getApplicationContext();
+        boolean notif = true;
+        boolean battery = false;
+        boolean channelOk = true;
+        try {
+            NotificationManager nm = (NotificationManager) c.getSystemService(Context.NOTIFICATION_SERVICE);
+            if (Build.VERSION.SDK_INT >= 24) {
+                notif = nm.areNotificationsEnabled();
+            }
+            if (Build.VERSION.SDK_INT >= 26) {
+                NotificationChannel ch = nm.getNotificationChannel(CHANNEL_ID);
+                channelOk = ch == null || ch.getImportance() != NotificationManager.IMPORTANCE_NONE;
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "status: notifications", e);
+        }
+        try {
+            if (Build.VERSION.SDK_INT >= 23) {
+                PowerManager pm = (PowerManager) c.getSystemService(Context.POWER_SERVICE);
+                battery = pm.isIgnoringBatteryOptimizations(c.getPackageName());
+            } else {
+                battery = true;
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "status: battery", e);
+        }
+        return "{\"notifications_enabled\":" + notif
+                + ",\"channel_enabled\":" + channelOk
+                + ",\"battery_unrestricted\":" + battery
+                + ",\"sdk\":" + Build.VERSION.SDK_INT
+                + ",\"manufacturer\":\"" + escape(Build.MANUFACTURER) + "\""
+                + ",\"model\":\"" + escape(Build.MODEL) + "\"}";
+    }
+
+    /** which: notifications | battery | app | autostart. Returns false if nothing could be opened. */
+    public static boolean openSettings(Activity activity, String which) {
+        String pkg = activity.getPackageName();
+        Intent[] candidates;
+        if ("notifications".equals(which) && Build.VERSION.SDK_INT >= 26) {
+            candidates = new Intent[]{
+                new Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, pkg),
+                appDetails(pkg)};
+        } else if ("battery".equals(which) && Build.VERSION.SDK_INT >= 23) {
+            candidates = new Intent[]{
+                new Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).setData(Uri.parse("package:" + pkg)),
+                new Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS),
+                appDetails(pkg)};
+        } else if ("autostart".equals(which)) {
+            // vivo / iQOO (Origin OS, Funtouch): background / autostart manager
+            candidates = new Intent[]{
+                new Intent().setClassName("com.vivo.permissionmanager",
+                        "com.vivo.permissionmanager.activity.BgStartUpManagerActivity"),
+                new Intent().setClassName("com.iqoo.secure",
+                        "com.iqoo.secure.ui.phoneoptimize.BgStartUpManager"),
+                new Intent().setClassName("com.iqoo.secure",
+                        "com.iqoo.secure.ui.phoneoptimize.AddWhiteListActivity"),
+                appDetails(pkg)};
+        } else {
+            candidates = new Intent[]{appDetails(pkg)};
+        }
+        for (Intent i : candidates) {
+            try {
+                i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                activity.startActivity(i);
+                Log.i(TAG, "openSettings(" + which + "): " + i);
+                return true;
+            } catch (Exception e) {
+                Log.w(TAG, "openSettings(" + which + ") failed: " + i + " " + e);
+            }
+        }
+        return false;
+    }
+
+    private static Intent appDetails(String pkg) {
+        return new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).setData(Uri.parse("package:" + pkg));
     }
 
     // ------------------------------------------------------------------
     // Setup
     // ------------------------------------------------------------------
 
+    private void post(Runnable r) {
+        main.post(r);
+    }
+
     private void setup() {
         try {
             if (Build.VERSION.SDK_INT >= 26) {
+                // LOW: no sound / heads-up, but visible in the shade and on the lock screen
                 NotificationChannel channel = new NotificationChannel(
                         CHANNEL_ID, "Воспроизведение", NotificationManager.IMPORTANCE_LOW);
-                channel.setDescription("Управление плеером YaSave");
+                channel.setDescription("Плеер YaSave в шторке и на экране блокировки");
                 channel.setShowBadge(false);
                 channel.setLockscreenVisibility(Notification.VISIBILITY_PUBLIC);
                 notifications.createNotificationChannel(channel);
+                Log.i(TAG, "setup: notification channel ready");
             }
         } catch (Exception e) {
-            Log.e(TAG, "channel", e);
+            Log.e(TAG, "setup: channel failed", e);
         }
 
         try {
@@ -247,21 +381,25 @@ public final class YaSavePlayer {
             session.setCallback(new MediaSession.Callback() {
                 @Override
                 public void onPlay() {
+                    Log.i(TAG, "session: play");
                     doResume();
                 }
 
                 @Override
                 public void onPause() {
+                    Log.i(TAG, "session: pause");
                     doPause();
                 }
 
                 @Override
                 public void onSkipToNext() {
+                    Log.i(TAG, "session: next");
                     commands.add("next");
                 }
 
                 @Override
                 public void onSkipToPrevious() {
+                    Log.i(TAG, "session: prev");
                     onPrevPressed();
                 }
 
@@ -272,16 +410,17 @@ public final class YaSavePlayer {
 
                 @Override
                 public void onStop() {
+                    Log.i(TAG, "session: stop");
                     doStop();
                 }
             }, main);
             if (Build.VERSION.SDK_INT < 27) {
-                // Required on old versions to receive media buttons / transport controls
                 session.setFlags(MediaSession.FLAG_HANDLES_MEDIA_BUTTONS
                         | MediaSession.FLAG_HANDLES_TRANSPORT_CONTROLS);
             }
+            Log.i(TAG, "setup: media session ready");
         } catch (Exception e) {
-            Log.e(TAG, "session", e);
+            Log.e(TAG, "setup: media session failed", e);
             session = null;
         }
 
@@ -290,15 +429,9 @@ public final class YaSavePlayer {
                 @Override
                 public void onReceive(Context context, Intent intent) {
                     String action = intent != null ? intent.getAction() : null;
-                    if (action == null) {
-                        return;
-                    }
+                    Log.i(TAG, "notification action: " + action);
                     if (ACTION_TOGGLE.equals(action)) {
-                        if ("playing".equals(state)) {
-                            doPause();
-                        } else {
-                            doResume();
-                        }
+                        doToggle();
                     } else if (ACTION_NEXT.equals(action)) {
                         commands.add("next");
                     } else if (ACTION_PREV.equals(action)) {
@@ -306,7 +439,7 @@ public final class YaSavePlayer {
                     } else if (ACTION_STOP.equals(action)) {
                         doStop();
                     } else if (AudioManager.ACTION_AUDIO_BECOMING_NOISY.equals(action)) {
-                        doPause(); // headphones unplugged
+                        doPause();
                     }
                 }
             };
@@ -321,9 +454,45 @@ public final class YaSavePlayer {
             } else {
                 ctx.registerReceiver(receiver, filter);
             }
+            Log.i(TAG, "setup: action receiver ready");
         } catch (Exception e) {
-            Log.e(TAG, "receiver", e);
+            Log.e(TAG, "setup: receiver failed", e);
         }
+    }
+
+    private void ensureService() {
+        if (service != null || serviceRequested) {
+            return;
+        }
+        try {
+            Intent i = new Intent(ctx, YaSaveMediaService.class);
+            if (Build.VERSION.SDK_INT >= 26) {
+                ctx.startForegroundService(i);
+            } else {
+                ctx.startService(i);
+            }
+            serviceRequested = true;
+            Log.i(TAG, "service: start requested");
+        } catch (Exception e) {
+            notifError = "Сервис не запустился: " + e.getClass().getSimpleName() + ": " + e.getMessage();
+            Log.e(TAG, "service: start failed", e);
+        }
+    }
+
+    private void onServiceAttached(Service s) {
+        service = s;
+        serviceRequested = false;
+        foreground = false;
+        Log.i(TAG, "service: attached, going foreground");
+        if ("idle".equals(state)) {
+            // Started but nothing to show (e.g. stopped meanwhile): leave cleanly
+            Notification n = buildNotification();
+            startForegroundSafe(n);
+            leaveForeground(true);
+            s.stopSelf();
+            return;
+        }
+        updateNotification();
     }
 
     // ------------------------------------------------------------------
@@ -360,6 +529,7 @@ public final class YaSavePlayer {
                     } else {
                         state = "paused";
                     }
+                    Log.i(TAG, "prepared: " + state + ", duration " + durationMs);
                     positionMs = 0;
                     positionAt = System.currentTimeMillis();
                     publish();
@@ -373,6 +543,7 @@ public final class YaSavePlayer {
                     if (p != player) {
                         return;
                     }
+                    Log.i(TAG, "completed, asking app for the next track");
                     state = "ended";
                     positionMs = durationMs;
                     positionAt = System.currentTimeMillis();
@@ -415,10 +586,29 @@ public final class YaSavePlayer {
             publish();
             mp.prepareAsync();
         } catch (Exception e) {
-            Log.e(TAG, "startPlayback", e);
+            Log.e(TAG, "startPlayback failed", e);
             state = "error";
             error = "Не удалось открыть поток: " + e.getClass().getSimpleName();
             publish();
+        }
+    }
+
+    private long currentPosition() {
+        long pos = positionMs;
+        if ("playing".equals(state) && positionAt > 0) {
+            pos += System.currentTimeMillis() - positionAt;
+        }
+        if (durationMs > 0 && pos > durationMs) {
+            pos = durationMs;
+        }
+        return pos;
+    }
+
+    private void doToggle() {
+        if ("playing".equals(state) || "buffering".equals(state)) {
+            doPause();
+        } else {
+            doResume();
         }
     }
 
@@ -448,8 +638,9 @@ public final class YaSavePlayer {
         }
         if ("ended".equals(state)) {
             doSeek(0);
+            state = "paused";
         }
-        if (!"paused".equals(state) && !"ended".equals(state)) {
+        if (!"paused".equals(state)) {
             return;
         }
         if (!requestFocus()) {
@@ -482,19 +673,18 @@ public final class YaSavePlayer {
     }
 
     private void onPrevPressed() {
-        // Like most players: restart the track if it has played for a while
-        long pos = positionMs;
-        if ("playing".equals(state)) {
-            pos += System.currentTimeMillis() - positionAt;
-        }
-        if (pos > 5000 || !hasPrev) {
+        if (currentPosition() > PREV_RESTART_MS || !hasPrev) {
             doSeek(0);
+            if ("ended".equals(state)) {
+                doResume();
+            }
         } else {
             commands.add("prev");
         }
     }
 
     private void doStop() {
+        Log.i(TAG, "stop");
         releasePlayer();
         state = "idle";
         positionMs = 0;
@@ -506,6 +696,10 @@ public final class YaSavePlayer {
         } catch (Exception ignored) {
         }
         leaveForeground(true);
+        Service s = service;
+        if (s != null) {
+            s.stopSelf();
+        }
         commands.add("stop");
     }
 
@@ -564,7 +758,7 @@ public final class YaSavePlayer {
             return result == AudioManager.AUDIOFOCUS_REQUEST_GRANTED;
         } catch (Exception e) {
             Log.w(TAG, "focus", e);
-            return true; // never block playback because of focus problems
+            return true;
         }
     }
 
@@ -605,14 +799,12 @@ public final class YaSavePlayer {
             }
             session.setMetadata(meta.build());
 
+            // Prev is always available: it restarts the track when there is no previous one
             long actions = PlaybackState.ACTION_PLAY | PlaybackState.ACTION_PAUSE
                     | PlaybackState.ACTION_PLAY_PAUSE | PlaybackState.ACTION_SEEK_TO
-                    | PlaybackState.ACTION_STOP;
+                    | PlaybackState.ACTION_STOP | PlaybackState.ACTION_SKIP_TO_PREVIOUS;
             if (hasNext) {
                 actions |= PlaybackState.ACTION_SKIP_TO_NEXT;
-            }
-            if (hasPrev || durationMs > 0) {
-                actions |= PlaybackState.ACTION_SKIP_TO_PREVIOUS;
             }
             int pbState;
             float speed = 0f;
@@ -630,14 +822,14 @@ public final class YaSavePlayer {
             }
             PlaybackState.Builder pb = new PlaybackState.Builder()
                     .setActions(actions)
-                    .setState(pbState, positionMs, speed);
+                    .setState(pbState, currentPosition(), speed);
             if ("error".equals(state)) {
                 pb.setErrorMessage(error);
             }
             session.setPlaybackState(pb.build());
             session.setActive(!"idle".equals(state));
         } catch (Exception e) {
-            Log.e(TAG, "updateSession", e);
+            Log.e(TAG, "updateSession failed", e);
         }
     }
 
@@ -669,78 +861,98 @@ public final class YaSavePlayer {
     }
 
     @SuppressWarnings("deprecation")
+    private Notification buildNotification() {
+        Notification.Builder b = Build.VERSION.SDK_INT >= 26
+                ? new Notification.Builder(ctx, CHANNEL_ID)
+                : new Notification.Builder(ctx);
+        boolean playing = "playing".equals(state) || "buffering".equals(state);
+        b.setSmallIcon(ctx.getApplicationInfo().icon)
+                .setContentTitle(title.length() > 0 ? title : "YaSave")
+                .setContentText(artist)
+                .setOngoing(playing)
+                .setShowWhen(false)
+                .setOnlyAlertOnce(true)
+                .setVisibility(Notification.VISIBILITY_PUBLIC)
+                .setCategory(Notification.CATEGORY_TRANSPORT)
+                .setDeleteIntent(action(ACTION_STOP, 4));
+        if (Build.VERSION.SDK_INT < 26) {
+            b.setPriority(Notification.PRIORITY_LOW);
+        }
+        if (Build.VERSION.SDK_INT >= 31) {
+            b.setForegroundServiceBehavior(Notification.FOREGROUND_SERVICE_IMMEDIATE);
+        }
+        PendingIntent content = openApp();
+        if (content != null) {
+            b.setContentIntent(content);
+        }
+        Bitmap art = cover;
+        if (art != null) {
+            b.setLargeIcon(art);
+        }
+        b.addAction(new Notification.Action(android.R.drawable.ic_media_previous, "Назад", action(ACTION_PREV, 1)));
+        b.addAction(new Notification.Action(
+                playing ? android.R.drawable.ic_media_pause : android.R.drawable.ic_media_play,
+                playing ? "Пауза" : "Играть", action(ACTION_TOGGLE, 2)));
+        b.addAction(new Notification.Action(android.R.drawable.ic_media_next, "Далее", action(ACTION_NEXT, 3)));
+        b.addAction(new Notification.Action(android.R.drawable.ic_menu_close_clear_cancel, "Закрыть", action(ACTION_STOP, 5)));
+        Notification.MediaStyle style = new Notification.MediaStyle().setShowActionsInCompactView(0, 1, 2);
+        if (session != null) {
+            style.setMediaSession(session.getSessionToken());
+        }
+        b.setStyle(style);
+        return b.build();
+    }
+
+    private void startForegroundSafe(Notification n) {
+        Service s = service;
+        if (s == null) {
+            return;
+        }
+        try {
+            if (Build.VERSION.SDK_INT >= 29) {
+                s.startForeground(NOTIFICATION_ID, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK);
+            } else {
+                s.startForeground(NOTIFICATION_ID, n);
+            }
+            foreground = true;
+            notifError = "";
+            Log.i(TAG, "notification: foreground started");
+        } catch (Exception e) {
+            // e.g. ForegroundServiceStartNotAllowedException / SecurityException (missing permission)
+            notifError = "startForeground: " + e.getClass().getSimpleName() + ": " + e.getMessage();
+            Log.e(TAG, "notification: startForeground failed", e);
+        }
+    }
+
     private void updateNotification() {
         if ("idle".equals(state)) {
             return;
         }
         try {
-            Notification.Builder b = Build.VERSION.SDK_INT >= 26
-                    ? new Notification.Builder(ctx, CHANNEL_ID)
-                    : new Notification.Builder(ctx);
-            boolean playing = "playing".equals(state) || "buffering".equals(state);
-            b.setSmallIcon(ctx.getApplicationInfo().icon)
-                    .setContentTitle(title)
-                    .setContentText(artist)
-                    .setOngoing(playing)
-                    .setShowWhen(false)
-                    .setOnlyAlertOnce(true)
-                    .setVisibility(Notification.VISIBILITY_PUBLIC)
-                    .setDeleteIntent(action(ACTION_STOP, 4));
-            if (Build.VERSION.SDK_INT < 26) {
-                b.setPriority(Notification.PRIORITY_LOW);
-            }
-            PendingIntent content = openApp();
-            if (content != null) {
-                b.setContentIntent(content);
-            }
-            Bitmap art = cover;
-            if (art != null) {
-                b.setLargeIcon(art);
-            }
-            b.addAction(new Notification.Action(android.R.drawable.ic_media_previous, "Назад", action(ACTION_PREV, 1)));
-            b.addAction(new Notification.Action(
-                    playing ? android.R.drawable.ic_media_pause : android.R.drawable.ic_media_play,
-                    playing ? "Пауза" : "Играть", action(ACTION_TOGGLE, 2)));
-            b.addAction(new Notification.Action(android.R.drawable.ic_media_next, "Далее", action(ACTION_NEXT, 3)));
-            b.addAction(new Notification.Action(android.R.drawable.ic_menu_close_clear_cancel, "Закрыть", action(ACTION_STOP, 5)));
-
-            Notification.MediaStyle style = new Notification.MediaStyle().setShowActionsInCompactView(0, 1, 2);
-            if (session != null) {
-                style.setMediaSession(session.getSessionToken());
-            }
-            b.setStyle(style);
-            Notification n = b.build();
-
-            if (!foreground) {
-                if (Build.VERSION.SDK_INT >= 29) {
-                    service.startForeground(NOTIFICATION_ID, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK);
-                } else {
-                    service.startForeground(NOTIFICATION_ID, n);
-                }
-                foreground = true;
-            } else {
+            Notification n = buildNotification();
+            if (service != null && !foreground) {
+                startForegroundSafe(n);
+            } else if (service != null) {
                 notifications.notify(NOTIFICATION_ID, n);
+            } else {
+                ensureService();
             }
         } catch (Exception e) {
-            // e.g. ForegroundServiceStartNotAllowedException or missing permission:
-            // playback still works, only the shade controls are missing.
-            Log.e(TAG, "updateNotification", e);
-            try {
-                if (!foreground) {
-                    error = "Уведомление недоступно: " + e.getClass().getSimpleName();
-                }
-            } catch (Exception ignored) {
-            }
+            notifError = "notification: " + e.getClass().getSimpleName() + ": " + e.getMessage();
+            Log.e(TAG, "notification: update failed", e);
         }
     }
 
     private void leaveForeground(boolean removeNotification) {
+        Service s = service;
         try {
-            if (Build.VERSION.SDK_INT >= 24) {
-                service.stopForeground(removeNotification
-                        ? Service.STOP_FOREGROUND_REMOVE : Service.STOP_FOREGROUND_DETACH);
-            } else {
-                service.stopForeground(removeNotification);
+            if (s != null) {
+                if (Build.VERSION.SDK_INT >= 24) {
+                    s.stopForeground(removeNotification
+                            ? Service.STOP_FOREGROUND_REMOVE : Service.STOP_FOREGROUND_DETACH);
+                } else {
+                    s.stopForeground(removeNotification);
+                }
             }
         } catch (Exception e) {
             Log.w(TAG, "stopForeground", e);

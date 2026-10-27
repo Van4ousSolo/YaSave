@@ -134,3 +134,51 @@ def measure_audio_bitrate(filepath: str) -> dict:
         result["kbps"] = round(size * 8 / length / 1000)
         result["method"] = "size_estimate"
     return result
+
+
+def embed_metadata_any(filepath: str, title: str, artist: str, album=None, year=None, cover_data=None) -> bool:
+    """Tags by container: MP3 (ID3v2), FLAC (Vorbis comments + picture), M4A (MP4 atoms)."""
+    ext = os.path.splitext(filepath)[1].lower()
+    if ext == ".mp3":
+        return embed_metadata(filepath, title, artist, album, year, cover_data)
+    mime = "image/png" if cover_data and cover_data.startswith(b"\x89PNG") else "image/jpeg"
+    try:
+        if ext == ".flac":
+            from mutagen.flac import FLAC, Picture
+            audio = FLAC(filepath)
+            audio["title"] = title or ""
+            audio["artist"] = artist or ""
+            if album:
+                audio["album"] = album
+            if year:
+                audio["date"] = str(year)
+            if cover_data:
+                pic = Picture()
+                pic.type = 3
+                pic.mime = mime
+                pic.desc = "Cover"
+                pic.data = cover_data
+                audio.clear_pictures()
+                audio.add_picture(pic)
+            audio.save()
+        elif ext in (".m4a", ".mp4"):
+            from mutagen.mp4 import MP4, MP4Cover
+            audio = MP4(filepath)
+            audio["\xa9nam"] = [title or ""]
+            audio["\xa9ART"] = [artist or ""]
+            if album:
+                audio["\xa9alb"] = [album]
+            if year:
+                audio["\xa9day"] = [str(year)]
+            if cover_data:
+                fmt = MP4Cover.FORMAT_PNG if mime == "image/png" else MP4Cover.FORMAT_JPEG
+                audio["covr"] = [MP4Cover(cover_data, imageformat=fmt)]
+            audio.save()
+        else:
+            logger.warning(f"No tag writer for {ext}")
+            return False
+        logger.info(f"Embedded tags ({ext}) for: {title} - {artist}")
+        return True
+    except Exception as e:
+        logger.error(f"Error embedding metadata into {filepath}: {e}")
+        return False

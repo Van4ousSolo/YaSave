@@ -91,6 +91,7 @@ const dom = {
   miniTitle: $('mini-title'),
   miniArtist: $('mini-artist'),
   miniToggle: $('mini-toggle'),
+  miniPrev: $('mini-prev'),
   miniNext: $('mini-next'),
   miniProgressFill: $('mini-progress-fill'),
   playerSheet: $('player-sheet'),
@@ -110,6 +111,11 @@ const dom = {
   // Diagnostics
   btnRunDiagnostics: $('btn-run-diagnostics'),
   diagOutput: $('diagnostics-output'),
+  btnQualityReport: $('btn-quality-report'),
+  qualityReportOutput: $('quality-report-output'),
+  bgSteps: $('bg-steps'),
+  bgPlayerStatus: $('bg-player-status'),
+  btnBgRefresh: $('btn-bg-refresh'),
 
   // History
   historyList: $('history-items-list'),
@@ -271,6 +277,7 @@ function switchTab(tabId) {
   positionNavIndicator(true);
   window.scrollTo(0, 0);
   if (tabId === 'tab-history') loadHistory();
+  if (tabId === 'tab-settings') refreshBackgroundStatus();
 }
 
 /* ================= 3. ACCENT PALETTE & THEMES ================= */
@@ -652,6 +659,12 @@ async function loadTrack(urlOrId) {
 }
 
 // Badge, button and note show what Yandex actually serves for this account / device
+function formatLabel(codec, kbps, quality) {
+  const name = { mp3: 'MP3', flac: 'FLAC', 'aac-mp4': 'AAC' }[codec] || String(codec || 'MP3').toUpperCase();
+  if (codec === 'flac' || quality === 'lossless') return `${name} lossless`;
+  return `${name} ${kbps} kbps`;
+}
+
 function renderTrackQuality(q) {
   if (!q || !q.bitrate) {
     dom.badgeBitrate.classList.add('hidden');
@@ -659,11 +672,12 @@ function renderTrackQuality(q) {
     dom.btnDownloadYmText.textContent = 'Скачать из Яндекс Музыки';
     return;
   }
-  const low = q.bitrate < 320;
-  dom.badgeBitrate.textContent = `${(q.codec || 'mp3').toUpperCase()} ${q.bitrate} kbps`;
+  const low = !(q.quality === 'hq' || q.quality === 'lossless' || q.bitrate >= 320);
+  const label = formatLabel(q.codec, q.bitrate, q.quality);
+  dom.badgeBitrate.textContent = label;
   dom.badgeBitrate.classList.remove('hidden');
   dom.badgeBitrate.classList.toggle('is-low', low);
-  dom.btnDownloadYmText.textContent = `Скачать из Яндекс Музыки · ${q.bitrate} kbps`;
+  dom.btnDownloadYmText.textContent = `Скачать из Яндекс Музыки · ${label}`;
   dom.qualityNote.textContent = q.note || '';
   dom.qualityNote.classList.toggle('hidden', !low || !q.note);
 }
@@ -733,13 +747,13 @@ function renderSavedQuality(q) {
   }
   const kbps = q.file_bitrate || q.api_bitrate;
   const how = q.file_method === 'file_header' ? 'проверено по файлу' : 'оценка по размеру файла';
-  let text = `MP3 ${kbps} kbps · ${how}`;
+  let text = `${formatLabel(q.codec, kbps, q.quality)} · ${how}`;
   if (q.api_bitrate && q.file_bitrate && Math.abs(q.api_bitrate - q.file_bitrate) > 8) {
     text += ` (Яндекс заявил ${q.api_bitrate})`;
   }
   dom.successQuality.textContent = text;
   dom.successQuality.classList.remove('hidden');
-  if (kbps < 320 && q.note) showToast(q.note, 'info');
+  if (q.note) showToast(q.note, 'info');
 }
 
 function updateProgress(percent, dlMb, totMb, statusText, speedText) {
@@ -1083,6 +1097,18 @@ function setSpotifyStatus(kind, text) {
 
 function initSettingsEvents() {
   if (dom.btnRunDiagnostics) dom.btnRunDiagnostics.addEventListener('click', runDiagnostics);
+  if (dom.btnQualityReport) dom.btnQualityReport.addEventListener('click', runQualityReport);
+  if (dom.btnBgRefresh) dom.btnBgRefresh.addEventListener('click', refreshBackgroundStatus);
+  document.querySelectorAll('.bg-step-btn').forEach(btn => btn.addEventListener('click', async () => {
+    try {
+      const r = await postJson('/api/system/open', { which: btn.dataset.open });
+      if (r.opened === false) showToast('Не удалось открыть настройки на этом телефоне', 'info');
+      if (r.result === 'not_needed') showToast('На этой версии Android разрешение не требуется', 'info');
+      setTimeout(refreshBackgroundStatus, 1500);
+    } catch (err) {
+      showToast(err.message, 'error');
+    }
+  }));
   if (!dom.btnSaveSpotify) return;
   dom.btnSaveSpotify.addEventListener('click', async () => {
     setButtonLoading(dom.btnSaveSpotify, true);
@@ -1274,6 +1300,18 @@ const Player = {
   // Applies a /api/player/play or /step answer
   apply(data) {
     if (!data || !data.track) return;
+    if (data.restart) {            // "back" on the first track restarts it
+      this.hasPrev = !!data.has_prev;
+      this.hasNext = !!data.has_next;
+      if (this.mode === 'web') {
+        this.seek(0);
+        if (dom.audioPlayer.paused) dom.audioPlayer.play().catch(() => {});
+      } else {
+        this.pos = 0;
+      }
+      return;
+    }
+    if (data.end) return;
     this.track = data.track;
     this.hasPrev = !!data.has_prev;
     this.hasNext = !!data.has_next;
@@ -1315,6 +1353,19 @@ const Player = {
       this.busy = false;
       this.emit();
     }
+  },
+
+  previous() {
+    if (!this.track || this.busy) return;
+    if (this.pos > 3 || !this.hasPrev) {
+      this.seek(0);
+      if (this.mode === 'web' && dom.audioPlayer.paused) dom.audioPlayer.play().catch(() => {});
+      else if (this.mode === 'native' && this.state !== 'playing') {
+        postJson('/api/player/command', { cmd: 'resume' }).catch(() => {});
+      }
+      return;
+    }
+    this.step(-1);
   },
 
   toggle() {
@@ -1444,16 +1495,14 @@ function initPlayer() {
 
   // Mini player
   dom.miniToggle.addEventListener('click', () => Player.toggle());
+  dom.miniPrev.addEventListener('click', () => Player.previous());
   dom.miniNext.addEventListener('click', () => Player.step(1));
   dom.miniOpen.addEventListener('click', openPlayerSheet);
 
   // Full player
   document.querySelectorAll('[data-close-player]').forEach(el => el.addEventListener('click', closePlayerSheet));
   dom.sheetToggle.addEventListener('click', () => Player.toggle());
-  dom.sheetPrev.addEventListener('click', () => {
-    if (Player.pos > 5 || !Player.hasPrev) Player.seek(0);
-    else Player.step(-1);
-  });
+  dom.sheetPrev.addEventListener('click', () => Player.previous());
   dom.sheetNext.addEventListener('click', () => Player.step(1));
   dom.sheetSeek.addEventListener('input', () => {
     Player.seeking = true;
@@ -1529,6 +1578,7 @@ function renderPlayerUi(p) {
   dom.miniNext.disabled = !p.hasNext || p.busy;
   dom.sheetNext.disabled = !p.hasNext || p.busy;
   dom.sheetPrev.disabled = p.busy;
+  dom.miniPrev.disabled = p.busy;   // never hidden: on the first track it restarts
   dom.playerSheet.classList.toggle('is-playing', playing || loading);
 
   const frac = p.dur > 0 ? Math.min(1, p.pos / p.dur) : 0;
@@ -1683,5 +1733,71 @@ async function runDiagnostics() {
     dom.diagOutput.innerHTML = `<div class="diag-row is-bad"><span class="diag-dot"></span><span class="diag-name">Проверка не выполнена<small>${escapeHtml(err.message)}</small></span><span></span></div>`;
   } finally {
     setButtonLoading(btn, false);
+  }
+}
+
+/* ================= 15. QUALITY REPORT & BACKGROUND PLAYBACK ================= */
+async function runQualityReport() {
+  const t = state.currentTrack;
+  if (!t) {
+    showToast('Сначала выберите трек во вкладке «Скачать»', 'info');
+    return;
+  }
+  setButtonLoading(dom.btnQualityReport, true);
+  dom.qualityReportOutput.classList.remove('hidden');
+  dom.qualityReportOutput.innerHTML = '<div class="diag-env"><span class="spinner"></span> Запрашиваем у Яндекса…</div>';
+  try {
+    const r = await postJson('/api/quality_report', { track_id: String(t.id) });
+    const rows = (r.variants || []).map(v => {
+      const ok = !v.error;
+      const detail = ok ? `${v.quality} · ${formatLabel(v.codec, v.bitrate, v.quality)} · ${v.transport}` : v.error;
+      return `<div class="diag-row ${ok ? '' : 'is-bad'}"><span class="diag-dot"></span>
+        <span class="diag-name">${escapeHtml(v.request)}<small>${escapeHtml(detail)}</small></span><span></span></div>`;
+    }).join('');
+    const acc = r.account || {};
+    const tok = r.token || {};
+    const yes = v => (v === true ? 'да' : v === false ? 'нет' : '?');
+    dom.qualityReportOutput.innerHTML = `
+      <div class="diag-section">Выбрано: ${escapeHtml(formatLabel(r.chosen.codec, r.chosen.bitrate, r.chosen.quality))} (${escapeHtml(r.chosen.api)})</div>
+      ${rows}
+      <div class="diag-env">Плюс: ${yes(acc.has_plus)} · право «высокое качество»: ${yes(acc.high_quality)}<br>
+      Токен выдан: ${escapeHtml(tok.client_name || tok.error || '—')}</div>
+      ${r.note ? `<p class="quality-note">${escapeHtml(r.note)}</p>` : ''}`;
+  } catch (err) {
+    dom.qualityReportOutput.innerHTML = `<div class="diag-row is-bad"><span class="diag-dot"></span><span class="diag-name">Ошибка<small>${escapeHtml(err.message)}</small></span><span></span></div>`;
+  } finally {
+    setButtonLoading(dom.btnQualityReport, false);
+  }
+}
+
+async function refreshBackgroundStatus() {
+  if (!dom.bgSteps) return;
+  try {
+    const res = await fetch('/api/system/status');
+    const st = await res.json();
+    if (!st.android) {
+      dom.bgPlayerStatus.textContent = 'Только для Android';
+      return;
+    }
+    const mark = (key, ok) => {
+      const step = dom.bgSteps.querySelector(`[data-check="${key}"]`);
+      if (!step) return;
+      step.classList.toggle('is-ok', ok === true);
+      step.classList.toggle('is-bad', ok === false);
+    };
+    const notifOk = st.notifications_enabled !== false && st.channel_enabled !== false && st.notification_permission !== false;
+    mark('notifications', notifOk);
+    mark('battery', st.battery_unrestricted === true);
+    const pb = st.playback || {};
+    let text;
+    if (!st.native) text = `Системный плеер недоступен: ${st.native_error || 'нет данных'}`;
+    else if (pb.notification_error) text = `Уведомление: ${pb.notification_error}`;
+    else if (pb.foreground) text = 'Плеер в шторке активен';
+    else text = 'Системный плеер готов';
+    dom.bgPlayerStatus.textContent = text;
+    dom.bgPlayerStatus.classList.toggle('is-ok', !!st.native && !pb.notification_error);
+    dom.bgPlayerStatus.classList.toggle('is-error', !st.native || !!pb.notification_error);
+  } catch (err) {
+    dom.bgPlayerStatus.textContent = 'Статус недоступен';
   }
 }

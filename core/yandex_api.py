@@ -7,7 +7,7 @@ from typing import Optional, Callable, Dict, Any, List
 from yandex_music import Client
 from .config import ConfigManager
 from .storage import get_download_directory, sanitize_filename
-from .metadata import embed_metadata, fetch_cover_bytes, measure_audio_bitrate
+from .metadata import embed_metadata, embed_metadata_any, fetch_cover_bytes, measure_audio_bitrate
 
 logger = logging.getLogger(__name__)
 
@@ -135,64 +135,124 @@ class YandexDownloader:
         YandexDownloader._account_cache = {"token": tok, "ts": time.time(), "info": info}
         return info
 
-    def pick_stream(self, track) -> Dict[str, Any]:
+    # Official Yandex Music OAuth clients (token issuer). Tokens of other clients may get lower quality.
+    KNOWN_CLIENTS = {
+        "23cabbbdc6cd418abb4b39c32c41195d": "Яндекс Музыка (официальное приложение)",
+    }
+
+    # Containers we can save and tag. Encrypted transports need AES (no 'cryptography' in the APK).
+    SAVE_EXT = {"mp3": ".mp3", "flac": ".flac", "aac-mp4": ".m4a"}
+    QUALITY_RANK = {"lossless": 3, "hq": 2, "nq": 1, "lq": 0}
+    CODEC_PREF = {"flac": 3, "mp3": 2, "aac-mp4": 1}
+
+    def token_client(self) -> Dict[str, Any]:
+        """Which OAuth app issued the token (quality can depend on it)."""
+        tok = self.config.token
+        if not tok:
+            return {}
+        try:
+            info = requests.get("https://login.yandex.ru/info", params={"format": "json"},
+                                headers={"Authorization": f"OAuth {tok}"}, timeout=8).json()
+            cid = info.get("client_id") or ""
+            return {"client_id": cid, "client_name": self.KNOWN_CLIENTS.get(cid, "сторонний OAuth-клиент")}
+        except Exception as e:
+            return {"error": str(e)}
+
+    def stream_variants(self, track) -> List[Dict[str, Any]]:
         """
-        Chooses the best MP3 stream.
-        1. get-file-info (current API, the only one that serves 320 kbps now) asked for 'hq'.
-        2. Legacy download-info (often capped at 192 kbps), sorted by bitrate.
-        The highest bitrate wins. Returns url, codec, bitrate, quality, api.
+        Everything Yandex offers for this track, via the documented methods only:
+          * get-file-info (current API; the server chooses the codec, preferring `quality`):
+              lossless / all codecs, and hq / mp3 only;
+          * download-info (legacy, often capped at 192 kbps).
+        URLs stay in the dicts but are never logged.
         """
-        options: List[Dict[str, Any]] = []
         client = self.ensure_client()
         track_id = str(getattr(track, "track_id", None) or getattr(track, "id", None) or track)
+        variants: List[Dict[str, Any]] = []
+
+        for quality, codecs in (("lossless", None), ("hq", ["mp3"])):
+            req = f"get-file-info quality={quality} codecs={'all' if codecs is None else ','.join(codecs)} transport=raw"
+            try:
+                fi = client.tracks_file_info(track_id, quality=quality, codecs=codecs, transport="raw")
+                d = fi.download_info if fi else None
+                if d and d.url:
+                    variants.append({"api": "get-file-info", "request": req, "quality": d.quality,
+                                     "codec": d.codec, "bitrate": int(d.bitrate or 0),
+                                     "transport": d.transport, "url": d.url})
+            except Exception as e:
+                variants.append({"api": "get-file-info", "request": req, "error": f"{type(e).__name__}: {e}"[:200]})
 
         try:
-            fi = client.tracks_file_info(track_id, quality="hq", codecs=["mp3"], transport="raw")
-            d = fi.download_info if fi else None
-            if d and d.url and d.codec == "mp3" and d.transport == "raw":
-                options.append({"url": d.url, "codec": d.codec, "bitrate": int(d.bitrate or 0),
-                                "quality": d.quality, "api": "get-file-info"})
+            track_obj = track if hasattr(track, "get_download_info") else client.tracks([track_id])[0]
+            for i in track_obj.get_download_info():
+                kbps = int(i.bitrate_in_kbps or 0)
+                variants.append({"api": "download-info", "request": "download-info", "quality": "hq" if kbps >= 320 else "nq",
+                                 "codec": i.codec, "bitrate": kbps, "transport": "raw", "preview": bool(i.preview),
+                                 "_info": i})
         except Exception as e:
-            logger.warning(f"get-file-info failed for {track_id}: {e}")
+            variants.append({"api": "download-info", "request": "download-info", "error": f"{type(e).__name__}: {e}"[:200]})
 
-        if not options or options[0]["bitrate"] < 320:
-            try:
-                track_obj = track if hasattr(track, "get_download_info") else client.tracks([track_id])[0]
-                infos = [i for i in track_obj.get_download_info() if i.codec == "mp3" and not i.preview]
-                infos.sort(key=lambda i: i.bitrate_in_kbps or 0, reverse=True)
-                if infos and (not options or (infos[0].bitrate_in_kbps or 0) > options[0]["bitrate"]):
-                    best = infos[0]
-                    options.insert(0, {"url": best.get_direct_link(), "codec": "mp3",
-                                       "bitrate": int(best.bitrate_in_kbps or 0),
-                                       "quality": "hq" if (best.bitrate_in_kbps or 0) >= 320 else "nq",
-                                       "api": "download-info"})
-            except Exception as e:
-                logger.warning(f"download-info failed for {track_id}: {e}")
+        logger.info("Yandex variants for %s: %s", track_id, "; ".join(
+            v.get("error") and f"{v['request']} -> ERROR {v['error']}"
+            or f"{v['request']} -> {v['quality']} {v['codec']} {v['bitrate']} kbps {v['transport']}"
+            for v in variants))
+        return variants
 
-        if not options:
+    def pick_stream(self, track) -> Dict[str, Any]:
+        """Best savable variant: lossless FLAC > MP3 320 > lower, falling back down the list."""
+        variants = self.stream_variants(track)
+        usable = [v for v in variants if not v.get("error") and not v.get("preview")
+                  and v.get("transport") == "raw" and v.get("codec") in self.SAVE_EXT]
+        if not usable:
             raise RuntimeError("Яндекс не выдал ссылку на файл (нет прав на трек или он недоступен в регионе).")
-        best = max(options, key=lambda o: o["bitrate"])
+        best = dict(max(usable, key=lambda v: (self.QUALITY_RANK.get(v["quality"], 0),
+                                                self.CODEC_PREF.get(v["codec"], 0), v["bitrate"])))
+        if "_info" in best:
+            best["url"] = best.pop("_info").get_direct_link()
+        best["ext"] = self.SAVE_EXT[best["codec"]]
         best["note"] = self.quality_note(best)
+        best["variants"] = [{k: v.get(k) for k in ("api", "request", "quality", "codec", "bitrate", "transport", "error")}
+                            for v in variants]
+        logger.info(f"Yandex chosen: {best['quality']} {best['codec']} {best['bitrate']} kbps ({best['api']})")
         return best
 
     def quality_note(self, stream: Dict[str, Any]) -> str:
-        """Explains honestly why the stream is below 320 kbps ('' when it is 320)."""
-        if stream.get("bitrate", 0) >= 320:
+        """Facts only: what Yandex returned, plus what the user can check ('' for HQ / lossless)."""
+        if stream.get("quality") in ("hq", "lossless") or stream.get("bitrate", 0) >= 320:
             return ""
         acc = self.account_quality()
+        kbps = stream.get("bitrate") or 192
         if acc.get("has_plus") is False:
-            return "320 kbps доступен только с подпиской Яндекс Плюс. Без неё Яндекс отдаёт 192 kbps."
+            return f"Подписка Плюс не активна, поэтому Яндекс отдаёт максимум {kbps} kbps."
         if acc.get("high_quality") is False:
-            return "У аккаунта нет права на высокое качество (high-quality), поэтому только 192 kbps."
-        if stream.get("quality") == "nq":
-            return ("Яндекс выдал этому устройству только обычное качество (192 kbps), хотя Плюс активен. "
-                    "Так бывает при входе не из страны подписки, например через VPN.")
-        return "Для этого трека Яндекс не предоставляет 320 kbps."
+            return f"У аккаунта нет права «высокое качество», Яндекс вернул максимум {kbps} kbps."
+        return (f"Яндекс вернул максимум {kbps} kbps для этого аккаунта и устройства. "
+                "Что проверить: подписка Плюс активна; выйти и войти заново в Настройках; "
+                "«Проверить доступное качество» в Настройках покажет все варианты.")
+
+    @staticmethod
+    def format_label(codec: str, kbps: int, quality: str = "") -> str:
+        name = {"mp3": "MP3", "flac": "FLAC", "aac-mp4": "AAC"}.get(codec, (codec or "").upper())
+        if codec == "flac" or quality == "lossless":
+            return f"{name} lossless" + (f" ~{kbps} kbps" if kbps else "")
+        return f"{name} {kbps} kbps"
 
     def probe_quality(self, track_id: str) -> Dict[str, Any]:
         """Quality info for the track card (no download)."""
         s = self.pick_stream(track_id)
-        return {k: s.get(k) for k in ("codec", "bitrate", "quality", "api", "note")}
+        return {k: s.get(k) for k in ("codec", "bitrate", "quality", "api", "note", "ext")}
+
+    def quality_report(self, track_id: str) -> Dict[str, Any]:
+        """Settings -> "Проверить доступное качество": every variant + account facts."""
+        s = self.pick_stream(track_id)
+        return {
+            "track_id": track_id,
+            "chosen": {k: s.get(k) for k in ("api", "quality", "codec", "bitrate", "ext")},
+            "note": s.get("note"),
+            "variants": s.get("variants"),
+            "account": self.account_quality(),
+            "token": self.token_client(),
+        }
 
     def get_stream_url(self, track_id: str, preview: bool = False) -> str:
         """Direct mp3 link. For preview the lowest mp3 bitrate is used to start faster."""
@@ -261,7 +321,7 @@ class YandexDownloader:
         Downloads the track with streaming progress callback.
         on_progress(percent: 0-100, downloaded_mb, total_mb, speed_str)
         on_quality(dict): stream bitrate from the API, then the bitrate measured in the file.
-        Returns the absolute filepath of the tagged MP3 file.
+        Returns the absolute filepath of the tagged file (.mp3, .flac or .m4a).
         """
         client = self.ensure_client()
         track = track_info.get("raw_track")
@@ -277,6 +337,7 @@ class YandexDownloader:
         quality: Dict[str, Any] = {
             "api_bitrate": stream["bitrate"], "codec": stream["codec"],
             "quality": stream["quality"], "api": stream["api"], "note": stream["note"],
+            "variants": stream.get("variants"),
         }
         if on_quality:
             on_quality(dict(quality))
@@ -286,11 +347,11 @@ class YandexDownloader:
         save_folder = target_dir or get_download_directory()
         os.makedirs(save_folder, exist_ok=True)
 
-        filename = f"{sanitize_filename(track_info['artist'])} - {sanitize_filename(track_info['title'])}.mp3"
+        filename = f"{sanitize_filename(track_info['artist'])} - {sanitize_filename(track_info['title'])}{stream['ext']}"
         filepath = os.path.join(save_folder, filename)
 
         if on_status:
-            on_status(f"Загрузка: MP3 {stream['bitrate']} kbps (по ответу Яндекса)...")
+            on_status(f"Загрузка: {self.format_label(stream['codec'], stream['bitrate'], stream['quality'])} (по ответу Яндекса)...")
 
         # Streaming download
         resp = requests.get(direct_link, stream=True, timeout=30)
@@ -346,7 +407,7 @@ class YandexDownloader:
         if track_info.get("cover_url"):
             cover_data = fetch_cover_bytes(track_info["cover_url"])
 
-        embed_metadata(
+        embed_metadata_any(
             filepath=filepath,
             title=track_info["title"],
             artist=track_info["artist"],
@@ -365,6 +426,6 @@ class YandexDownloader:
 
         if on_status:
             how = "по файлу" if measured.get("method") == "file_header" else "оценка по размеру"
-            on_status(f"Сохранено: MP3 {measured.get('kbps') or stream['bitrate']} kbps ({how})")
+            on_status(f"Сохранено: {self.format_label(stream['codec'], measured.get('kbps') or stream['bitrate'], stream['quality'])} ({how})")
 
         return filepath

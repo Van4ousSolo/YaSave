@@ -2,8 +2,8 @@
 Playback controller (main app process).
 
 Owns the queue and turns queue items into playable URLs. Playback itself happens:
-  * on Android - in the native "Player" service (service/player.py + YaSavePlayer.java):
-    MediaSession, notification in the shade, lock screen, background playback;
+  * on Android - natively in this process: YaSavePlayer.java (MediaPlayer, MediaSession,
+    MediaStyle notification) + YaSaveMediaService (foreground, keeps the app alive);
   * elsewhere, or if the service could not start - in the WebView <audio> element
     (the API returns {"native": false, "url": ...} and the page plays it).
 """
@@ -14,26 +14,13 @@ import os
 import threading
 import time
 import urllib.parse
-import urllib.request
 from typing import Any, Dict, List, Optional
 
 from .storage import get_download_directory, get_cache_dir, is_android
 
 logger = logging.getLogger(__name__)
 
-SERVICE_URL = "http://127.0.0.1:58232"
-SERVICE_START_TIMEOUT = 12.0
 AUDIO_EXTS = (".mp3", ".m4a", ".webm", ".ogg", ".opus", ".flac", ".aac", ".wav")
-
-
-def _http(method: str, path: str, payload: Optional[dict] = None, timeout: float = 3.0) -> dict:
-    data = json.dumps(payload).encode("utf-8") if payload is not None else None
-    req = urllib.request.Request(
-        SERVICE_URL + path, data=data, method=method,
-        headers={"Content-Type": "application/json"} if data else {},
-    )
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return json.loads(resp.read() or b"{}")
 
 
 def safe_audio_path(filename: str) -> Optional[str]:
@@ -101,6 +88,31 @@ def extract_cover(path: str) -> Optional[str]:
         return None
 
 
+PREV_RESTART_SEC = 3
+
+
+class NativeBridge:
+    """pyjnius wrapper around org.yasave.media.YaSavePlayer (same process, no IPC)."""
+
+    def __init__(self):
+        from jnius import autoclass  # type: ignore
+        self._activity = autoclass("org.kivy.android.PythonActivity").mActivity
+        if self._activity is None:
+            raise RuntimeError("PythonActivity.mActivity is null")
+        self._cls = autoclass("org.yasave.media.YaSavePlayer")
+        self.player = self._cls.get(self._activity)
+        logger.info("native: YaSavePlayer ready")
+
+    def state(self) -> Dict[str, Any]:
+        return json.loads(self.player.getStateJson())
+
+    def system_status(self) -> Dict[str, Any]:
+        return json.loads(self._cls.systemStatus(self._activity))
+
+    def open_settings(self, which: str) -> bool:
+        return bool(self._cls.openSettings(self._activity, which))
+
+
 class PlayerController:
     _instance = None
 
@@ -109,11 +121,13 @@ class PlayerController:
         self.queue: List[Dict[str, Any]] = []
         self.index = -1
         self.current: Optional[Dict[str, Any]] = None   # public track info for the UI
+        self.native: Optional[NativeBridge] = None
         self.native_ok: Optional[bool] = None          # None = not tried yet
         self.native_error = ""
         self.notif_permission_asked = False
         self.resolve_seq = 0
         self.last_error = ""
+        self._poller: Optional[threading.Thread] = None
 
     @classmethod
     def get(cls) -> "PlayerController":
@@ -122,76 +136,88 @@ class PlayerController:
         return cls._instance
 
     # ------------------------------------------------------------------
-    # Native service
+    # Native layer
     # ------------------------------------------------------------------
 
-    def _request_notification_permission(self):
-        if self.notif_permission_asked:
-            return
+    def request_notification_permission(self, force: bool = False) -> str:
+        """Android 13+: runtime POST_NOTIFICATIONS. Returns granted / requested / not_needed / error."""
+        if self.notif_permission_asked and not force:
+            return "asked"
         self.notif_permission_asked = True
         try:
             import sys
             if getattr(sys, "getandroidapilevel", lambda: 0)() < 33:
-                return
+                return "not_needed"
             from android.permissions import request_permissions, check_permission  # type: ignore
             perm = "android.permission.POST_NOTIFICATIONS"
-            if not check_permission(perm):
-                request_permissions([perm])
+            if check_permission(perm):
+                logger.info("native: POST_NOTIFICATIONS already granted")
+                return "granted"
+            logger.info("native: requesting POST_NOTIFICATIONS")
+            request_permissions([perm])
+            return "requested"
         except Exception as e:
-            logger.warning(f"notification permission request failed: {e}")
-
-    def _ping(self) -> Optional[dict]:
-        try:
-            return _http("GET", "/ping", timeout=1.0)
-        except Exception:
-            return None
+            logger.exception("native: notification permission request failed")
+            return f"error: {e}"
 
     def ensure_native(self) -> bool:
-        """Starts the Android playback service once. False -> use in-app <audio>."""
+        """Creates the Java player once. False -> the page plays through <audio>."""
         if not is_android():
             self.native_ok = False
-            self.native_error = "not android"
+            self.native_error = "не Android"
             return False
         if self.native_ok:
             return True
-        if self.native_ok is False and self.native_error and "timeout" not in self.native_error:
+        if self.native_ok is False:
             return False
-
-        self._request_notification_permission()
-        info = self._ping()
-        if info is None:
-            try:
-                from jnius import autoclass  # type: ignore
-                activity = autoclass("org.kivy.android.PythonActivity").mActivity
-                autoclass("org.yasave.yasave.ServicePlayer").start(activity, "")
-            except Exception as e:
-                self.native_ok = False
-                self.native_error = f"service start failed: {e}"
-                logger.exception("player service start failed")
-                return False
-            deadline = time.time() + SERVICE_START_TIMEOUT
-            while time.time() < deadline:
-                info = self._ping()
-                if info is not None:
-                    break
-                time.sleep(0.25)
-        if info is None:
+        logger.info("native: init step 1/2 - notification permission")
+        self.request_notification_permission()
+        logger.info("native: init step 2/2 - YaSavePlayer via pyjnius")
+        try:
+            self.native = NativeBridge()
+        except Exception as e:
             self.native_ok = False
-            self.native_error = "service timeout"
-            return False
-        if not info.get("native"):
-            self.native_ok = False
-            self.native_error = info.get("error") or "native player unavailable"
-            logger.error(f"native player unavailable: {self.native_error}")
+            self.native_error = f"{type(e).__name__}: {e}"
+            logger.exception("native: init failed, falling back to in-app audio")
             return False
         self.native_ok = True
         self.native_error = ""
+        self._start_poller()
         return True
 
     def prewarm(self):
-        """Start the service in the background so the first play is instant."""
         if is_android():
             threading.Thread(target=self.ensure_native, daemon=True).start()
+
+    def _start_poller(self):
+        """next / prev / ended pressed in the shade or lock screen -> resolve here."""
+        if self._poller is not None:
+            return
+
+        def loop():
+            logger.info("native: command poller started")
+            while True:
+                try:
+                    cmd = self.native.player.pollCommand() if self.native else None
+                except Exception:
+                    logger.exception("native: pollCommand failed")
+                    cmd = None
+                if cmd:
+                    logger.info(f"native: command from system player: {cmd}")
+                    try:
+                        if cmd in ("next", "ended"):
+                            self.step(1, auto=(cmd == "ended"))
+                        elif cmd == "prev":
+                            self.step(-1)
+                        elif cmd == "stop":
+                            with self.lock:
+                                self.current = None
+                    except Exception as e:
+                        logger.warning(f"native: command {cmd} failed: {e}")
+                time.sleep(0.05 if cmd else 0.25)
+
+        self._poller = threading.Thread(target=loop, daemon=True, name="yasave-player-commands")
+        self._poller.start()
 
     # ------------------------------------------------------------------
     # Queue
@@ -247,37 +273,34 @@ class PlayerController:
         with self.lock:
             if not (0 <= index < len(self.queue)):
                 raise IndexError("Нет трека в очереди")
-            self.index = index
             self.resolve_seq += 1
             my_seq = self.resolve_seq
             item = self.queue[index]
 
+        logger.info(f"player: resolving queue item {index + 1}/{len(self.queue)} ({item.get('type')})")
         resolved = self._resolve(item)  # network: outside the lock
 
         with self.lock:
             if my_seq != self.resolve_seq:
                 raise RuntimeError("Переключено на другой трек")
+            # The index moves only once the item is really playable
+            self.index = index
             self.current = resolved["track"]
             self.last_error = ""
             has_prev, has_next = self._has_prev(), self._has_next()
 
         if self.ensure_native():
             try:
-                _http("POST", "/cmd", {
-                    "cmd": "play",
-                    "url": resolved["url"],
-                    "title": resolved["track"]["title"],
-                    "artist": resolved["track"]["artist"],
-                    "cover": resolved["cover_native"],
-                    "duration_ms": resolved["track"]["duration"] * 1000,
-                    "has_prev": has_prev,
-                    "has_next": has_next,
-                }, timeout=5)
+                t = resolved["track"]
+                self.native.player.play(resolved["url"], t["title"], t["artist"], resolved["cover_native"],
+                                        int(t["duration"]) * 1000, has_prev, has_next)
+                logger.info(f"player: native play '{t['title']}' ({index + 1}/{len(self.queue)})")
                 return {"native": True, "track": self.current, "has_prev": has_prev, "has_next": has_next}
             except Exception as e:
-                logger.exception("native play failed, falling back to web audio")
+                logger.exception("player: native play failed, falling back to in-app audio")
                 self.native_ok = False
-                self.native_error = f"play failed: {e}"
+                self.native_error = f"play: {type(e).__name__}: {e}"
+        logger.info(f"player: web play '{resolved['track']['title']}' ({self.native_error or 'desktop'})")
         return {"native": False, "url": resolved["web_url"], "track": self.current,
                 "has_prev": has_prev, "has_next": has_next}
 
@@ -287,16 +310,24 @@ class PlayerController:
             raise ValueError("Пустая очередь")
         with self.lock:
             self.queue = items
+            self.index = -1
         return self._start(max(0, min(int(index or 0), len(items) - 1)))
 
     def step(self, direction: int, auto: bool = False) -> Dict[str, Any]:
         with self.lock:
             target = self.index + (1 if direction > 0 else -1)
-            if not (0 <= target < len(self.queue)):
-                if auto and self.native_ok:
-                    # End of queue: leave the finished track paused in the notification
-                    return {"native": True, "track": self.current, "end": True}
-                raise IndexError("Это последний трек в очереди" if direction > 0 else "Это первый трек")
+            in_range = 0 <= target < len(self.queue)
+        if not in_range:
+            if direction < 0:
+                # First track: "back" restarts it
+                self.command("seek", 0)
+                with self.lock:
+                    return {"native": bool(self.native_ok), "restart": True, "track": self.current,
+                            "has_prev": self._has_prev(), "has_next": self._has_next()}
+            if auto:
+                # End of the queue: the finished track stays (paused at the end)
+                return {"native": bool(self.native_ok), "end": True, "track": self.current}
+            raise IndexError("Это последний трек в очереди")
         # Skip items that fail to resolve (e.g. a removed video), at most 3 in a row
         last_exc: Optional[Exception] = None
         for _ in range(3):
@@ -304,13 +335,22 @@ class PlayerController:
                 return self._start(target)
             except Exception as e:
                 last_exc = e
-                logger.warning(f"skip unplayable queue item {target}: {e}")
+                logger.warning(f"player: skip unplayable queue item {target}: {e}")
+                target += 1 if direction > 0 else -1
                 with self.lock:
-                    target += 1 if direction > 0 else -1
                     if not (0 <= target < len(self.queue)):
                         break
         self.last_error = str(last_exc) if last_exc else ""
         raise RuntimeError(f"Не удалось воспроизвести: {last_exc}")
+
+    def previous(self, position_sec: float) -> Dict[str, Any]:
+        """In-app "back": restart after 3 s (or on the first track), otherwise previous track."""
+        if position_sec > PREV_RESTART_SEC or not self._has_prev():
+            self.command("seek", 0)
+            with self.lock:
+                return {"native": bool(self.native_ok), "restart": True, "track": self.current,
+                        "has_prev": self._has_prev(), "has_next": self._has_next()}
+        return self.step(-1)
 
     def command(self, cmd: str, position_ms: int = 0) -> Dict[str, Any]:
         if cmd in ("next", "prev"):
@@ -318,11 +358,18 @@ class PlayerController:
         if cmd == "stop":
             with self.lock:
                 self.current = None
-        if self.native_ok:
-            payload = {"cmd": cmd}
-            if cmd == "seek":
-                payload["position_ms"] = int(position_ms)
-            _http("POST", "/cmd", payload, timeout=3)
+        if self.native_ok and self.native:
+            p = self.native.player
+            if cmd == "toggle":
+                p.toggle()
+            elif cmd == "pause":
+                p.pause()
+            elif cmd == "resume":
+                p.resume()
+            elif cmd == "seek":
+                p.seekTo(int(position_ms))
+            elif cmd == "stop":
+                p.stop()
         return {"ok": True}
 
     def state(self) -> Dict[str, Any]:
@@ -337,9 +384,9 @@ class PlayerController:
                 "native_error": self.native_error,
                 "error": self.last_error,
             }
-        if self.native_ok:
+        if self.native_ok and self.native:
             try:
-                svc = _http("GET", "/state", timeout=1.5)
+                svc = self.native.state()
                 base["playback"] = svc
                 if svc.get("state") == "idle" and base["track"] is not None and svc.get("seq", 0) > 0:
                     base["track"] = None  # stopped from the notification
@@ -348,3 +395,35 @@ class PlayerController:
             except Exception as e:
                 base["playback"] = {"state": "unknown", "error": str(e)}
         return base
+
+    # ------------------------------------------------------------------
+    # Background playback helpers (Settings screen)
+    # ------------------------------------------------------------------
+
+    def system_status(self) -> Dict[str, Any]:
+        out: Dict[str, Any] = {"android": is_android(), "native": bool(self.native_ok),
+                               "native_error": self.native_error}
+        if not is_android():
+            return out
+        self.ensure_native()
+        if self.native:
+            try:
+                out.update(self.native.system_status())
+                out["playback"] = self.native.state()
+            except Exception as e:
+                out["status_error"] = str(e)
+                logger.exception("native: system status failed")
+        try:
+            from android.permissions import check_permission  # type: ignore
+            out["notification_permission"] = bool(check_permission("android.permission.POST_NOTIFICATIONS"))
+        except Exception as e:
+            out["notification_permission"] = None
+            logger.debug(f"check_permission failed: {e}")
+        return out
+
+    def open_settings(self, which: str) -> Dict[str, Any]:
+        if which == "permission":
+            return {"result": self.request_notification_permission(force=True)}
+        if not (is_android() and self.ensure_native() and self.native):
+            raise RuntimeError("Доступно только в Android-приложении")
+        return {"opened": self.native.open_settings(which)}
