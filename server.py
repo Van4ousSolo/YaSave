@@ -337,6 +337,11 @@ def api_player_previous():
     data = request.json or {}
     return _player_call(lambda: PlayerController.get().previous(float(data.get("position") or 0)))
 
+@app.route('/api/player/progress_mode', method='POST')
+def api_player_progress_mode():
+    data = request.json or {}
+    return _player_call(lambda: {"mode": PlayerController.get().apply_progress_mode(data.get("mode"))})
+
 @app.route('/api/player/selftest', method='POST')
 def api_player_selftest():
     return _player_call(lambda: PlayerController.get().self_test())

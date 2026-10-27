@@ -86,6 +86,26 @@ public final class YaSavePlayer {
     private volatile boolean resumeOnFocusGain = false;
     private volatile boolean testMode = false;
 
+    // Progress in the notification:
+    //  "session" - only MediaSession (PlaybackState position/speed + metadata duration);
+    //              the system draws and animates the seekbar itself (Android 10+ media controls).
+    //  "bar"     - classic Notification.setProgress, refreshed every 2 s while playing,
+    //              for shells that ignore the session seekbar.
+    //  "auto"    - "bar" on vivo / iQOO (Origin OS, Funtouch), "session" elsewhere.
+    // Only one of the two is ever shown.
+    private volatile String progressMode = "auto";
+    private static final long BAR_REFRESH_MS = 2000;
+
+    private final Runnable barTicker = new Runnable() {
+        @Override
+        public void run() {
+            if (useProgressBar() && "playing".equals(state) && durationMs > 0) {
+                updateNotification();
+                main.postDelayed(this, BAR_REFRESH_MS);
+            }
+        }
+    };
+
     private final Runnable ticker = new Runnable() {
         @Override
         public void run() {
@@ -310,6 +330,51 @@ public final class YaSavePlayer {
         }
     }
 
+    /** "auto" | "session" | "bar" (see progressMode). */
+    public void setProgressMode(final String mode) {
+        progressMode = mode == null ? "auto" : mode;
+        Log.i(TAG, "progress mode: " + progressMode + " -> " + (useProgressBar() ? "notification bar" : "session seekbar"));
+        post(new Runnable() {
+            @Override
+            public void run() {
+                if (!"idle".equals(state)) {
+                    publish();
+                }
+            }
+        });
+    }
+
+    /** Re-publish position/state (e.g. when the user returns to the app). */
+    public void refresh() {
+        post(new Runnable() {
+            @Override
+            public void run() {
+                if (!"idle".equals(state)) {
+                    publish();
+                }
+            }
+        });
+    }
+
+    private boolean useProgressBar() {
+        String m = progressMode;
+        if ("bar".equals(m)) {
+            return true;
+        }
+        if ("session".equals(m)) {
+            return false;
+        }
+        String maker = (Build.MANUFACTURER + " " + Build.BRAND).toLowerCase();
+        return maker.contains("vivo") || maker.contains("iqoo");
+    }
+
+    private void restartBarTicker() {
+        main.removeCallbacks(barTicker);
+        if (useProgressBar() && "playing".equals(state) && durationMs > 0) {
+            main.postDelayed(barTicker, BAR_REFRESH_MS);
+        }
+    }
+
     /** Returns "next", "prev", "ended", "stop" or null. */
     public String pollCommand() {
         return commands.poll();
@@ -329,6 +394,7 @@ public final class YaSavePlayer {
                 + ",\"session_active\":" + sessionActive()
                 + ",\"channel\":" + channelExists()
                 + ",\"test\":" + testMode
+                + ",\"progress\":\"" + (useProgressBar() ? "bar" : "session") + "\""
                 + ",\"error\":\"" + escape(error) + "\""
                 + ",\"notification_error\":\"" + escape(notifError) + "\""
                 + ",\"title\":\"" + escape(title) + "\"}";
@@ -769,6 +835,7 @@ public final class YaSavePlayer {
 
     private void releasePlayer() {
         main.removeCallbacks(ticker);
+        main.removeCallbacks(barTicker);
         if (player != null) {
             try {
                 player.reset();
@@ -846,6 +913,7 @@ public final class YaSavePlayer {
     private void publish() {
         updateSession();
         updateNotification();
+        restartBarTicker();
     }
 
     private void updateSession() {
@@ -856,7 +924,8 @@ public final class YaSavePlayer {
             MediaMetadata.Builder meta = new MediaMetadata.Builder()
                     .putString(MediaMetadata.METADATA_KEY_TITLE, title)
                     .putString(MediaMetadata.METADATA_KEY_ARTIST, artist)
-                    .putLong(MediaMetadata.METADATA_KEY_DURATION, durationMs);
+                    // Unknown duration -> no seekbar instead of a broken one
+                    .putLong(MediaMetadata.METADATA_KEY_DURATION, durationMs > 0 ? durationMs : -1L);
             Bitmap art = cover;
             if (art != null) {
                 meta.putBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART, art);
@@ -865,8 +934,11 @@ public final class YaSavePlayer {
 
             // Prev is always available: it restarts the track when there is no previous one
             long actions = PlaybackState.ACTION_PLAY | PlaybackState.ACTION_PAUSE
-                    | PlaybackState.ACTION_PLAY_PAUSE | PlaybackState.ACTION_SEEK_TO
-                    | PlaybackState.ACTION_STOP | PlaybackState.ACTION_SKIP_TO_PREVIOUS;
+                    | PlaybackState.ACTION_PLAY_PAUSE | PlaybackState.ACTION_STOP
+                    | PlaybackState.ACTION_SKIP_TO_PREVIOUS;
+            if (durationMs > 0) {
+                actions |= PlaybackState.ACTION_SEEK_TO;  // draggable seekbar in the shade
+            }
             if (hasNext) {
                 actions |= PlaybackState.ACTION_SKIP_TO_NEXT;
             }
@@ -886,7 +958,7 @@ public final class YaSavePlayer {
             }
             PlaybackState.Builder pb = new PlaybackState.Builder()
                     .setActions(actions)
-                    .setState(pbState, currentPosition(), speed);
+                    .setState(pbState, currentPosition(), speed, android.os.SystemClock.elapsedRealtime());
             if ("error".equals(state)) {
                 pb.setErrorMessage(error);
             }
@@ -924,13 +996,23 @@ public final class YaSavePlayer {
         }
     }
 
+    private int icon(String name, int fallback) {
+        try {
+            int id = ctx.getResources().getIdentifier(name, "drawable", ctx.getPackageName());
+            return id != 0 ? id : fallback;
+        } catch (Exception e) {
+            return fallback;
+        }
+    }
+
     @SuppressWarnings("deprecation")
     private Notification buildNotification() {
         Notification.Builder b = Build.VERSION.SDK_INT >= 26
                 ? new Notification.Builder(ctx, CHANNEL_ID)
                 : new Notification.Builder(ctx);
         boolean playing = "playing".equals(state) || "buffering".equals(state);
-        b.setSmallIcon(ctx.getApplicationInfo().icon)
+        // Small icon: white silhouette on transparent (res/drawable/ic_ys_note.xml)
+        b.setSmallIcon(icon("ic_ys_note", ctx.getApplicationInfo().icon))
                 .setContentTitle(title.length() > 0 ? title : "YaSave")
                 .setContentText(artist)
                 .setOngoing(playing)
@@ -953,12 +1035,22 @@ public final class YaSavePlayer {
         if (art != null) {
             b.setLargeIcon(art);
         }
-        b.addAction(new Notification.Action(android.R.drawable.ic_media_previous, "Назад", action(ACTION_PREV, 1)));
+        b.addAction(new Notification.Action(icon("ic_ys_prev", android.R.drawable.ic_media_previous),
+                "Назад", action(ACTION_PREV, 1)));
         b.addAction(new Notification.Action(
-                playing ? android.R.drawable.ic_media_pause : android.R.drawable.ic_media_play,
+                playing ? icon("ic_ys_pause", android.R.drawable.ic_media_pause)
+                        : icon("ic_ys_play", android.R.drawable.ic_media_play),
                 playing ? "Пауза" : "Играть", action(ACTION_TOGGLE, 2)));
-        b.addAction(new Notification.Action(android.R.drawable.ic_media_next, "Далее", action(ACTION_NEXT, 3)));
-        b.addAction(new Notification.Action(android.R.drawable.ic_menu_close_clear_cancel, "Закрыть", action(ACTION_STOP, 5)));
+        b.addAction(new Notification.Action(icon("ic_ys_next", android.R.drawable.ic_media_next),
+                "Далее", action(ACTION_NEXT, 3)));
+        b.addAction(new Notification.Action(icon("ic_ys_close", android.R.drawable.ic_menu_close_clear_cancel),
+                "Закрыть", action(ACTION_STOP, 5)));
+        if (useProgressBar() && durationMs > 0 && !"idle".equals(state)) {
+            int max = 1000;
+            long pos = currentPosition();
+            b.setProgress(max, (int) Math.min(max, pos * max / durationMs), false);
+            b.setSubText(fmt(pos) + " / " + fmt(durationMs));
+        }
         Notification.MediaStyle style = new Notification.MediaStyle().setShowActionsInCompactView(0, 1, 2);
         if (session != null) {
             style.setMediaSession(session.getSessionToken());
@@ -1075,6 +1167,11 @@ public final class YaSavePlayer {
                 });
             }
         }).start();
+    }
+
+    private static String fmt(long ms) {
+        long sec = Math.max(0, ms / 1000);
+        return (sec / 60) + ":" + String.format("%02d", sec % 60);
     }
 
     private static String escape(String s) {

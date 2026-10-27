@@ -53,6 +53,8 @@ android.add_src = android/src
 # p4a puts .aar files into libs/ and references them by name, so Gradle needs a flatDir repo.
 android.add_aars = android/build/yasave-media.aar
 android.add_gradle_repositories = flatDir { dirs 'libs' }
+# Thin outline notification icons (vector drawables) -> res/drawable
+android.add_resources = android/res/drawable:drawable
 
 # (str) Icon of the application
 icon.filename = %(source.dir)s/assets/icon.png

@@ -129,6 +129,12 @@ jobs:
             | grep -qiE '=("?mediaPlayback"?|(\(type 0x[0-9a-f]+\))?0x0*2|2)([^0-9a-fx]|$)' \
             && ok "service type mediaPlayback" || bad "YaSaveMediaService has no foregroundServiceType=mediaPlayback"
 
+          echo "== notification icons (res/drawable) =="
+          "$BT/aapt2" dump resources "$APK" > "$OUT/resources.txt" 2>/dev/null || true
+          for r in ic_ys_note ic_ys_prev ic_ys_play ic_ys_pause ic_ys_next ic_ys_close; do
+            grep -q "drawable/$r" "$OUT/resources.txt" && ok "drawable/$r" || bad "drawable/$r is missing (android.add_resources)"
+          done
+
           echo "== assets =="
           unzip -l "$APK" > "$OUT/apk-files.txt"
           grep -q " assets/_load.html$" "$OUT/apk-files.txt" && ok "assets/_load.html" || bad "android/_load.html is not packaged as assets/_load.html"

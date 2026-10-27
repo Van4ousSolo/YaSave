@@ -175,8 +175,27 @@ class PlayerController:
             return False
         self.native_ok = True
         self.native_error = ""
+        self.apply_progress_mode()
         self._start_poller()
         return True
+
+    def apply_progress_mode(self, mode: Optional[str] = None) -> str:
+        """Notification progress: auto | session (system seekbar) | bar (setProgress)."""
+        from .config import ConfigManager
+        cfg = ConfigManager.get_instance()
+        if mode is not None:
+            if mode not in ("auto", "session", "bar"):
+                raise ValueError("Режим: auto, session или bar")
+            cfg.data["notif_progress"] = mode
+            cfg.save()
+        mode = cfg.data.get("notif_progress") or "auto"
+        if self.native_ok and self.native:
+            try:
+                self.native.player.setProgressMode(mode)
+                logger.info(f"native: notification progress mode = {mode}")
+            except Exception:
+                logger.exception("native: setProgressMode failed")
+        return mode
 
     def prewarm(self):
         if is_android():
@@ -363,6 +382,8 @@ class PlayerController:
                 p.seekTo(int(position_ms))
             elif cmd == "stop":
                 p.stop()
+            elif cmd == "refresh":
+                p.refresh()
         return {"ok": True}
 
     def state(self) -> Dict[str, Any]:

@@ -3233,3 +3233,101 @@ body.has-player .app-container {
   grid-template-columns: 1fr 1fr;
   gap: 8px;
 }
+
+/* ================= v3.3: classic Liquid Aura (from v2.0, commit c12ebdd) =================
+   Same orbs, colours, sizes, opacity and motion as v2.0:
+     orb-1 380px accent, top-right, floatOrb1 16s, opacity .45
+     orb-2 420px #7928ca, bottom-left, floatOrb2 22s, opacity .45
+     orb-3 320px #0070f3, centre, floatOrb3 18s, opacity .25
+   v2.0 used filter: blur(90px) on each orb. Here the blurred result is baked into a
+   gaussian radial gradient (box enlarged by the blur radius), so the animation only
+   moves pre-painted layers with transform: no per-frame filter work in the WebView. */
+[data-theme="dark"] {
+  --bg-deep: #070a12;
+}
+
+.aura-orb {
+  filter: none;
+  will-change: transform;
+}
+
+.orb-1 {
+  width: 634px;
+  height: 634px;
+  max-width: none;
+  max-height: none;
+  top: -207px;
+  right: -207px;
+  left: auto;
+  bottom: auto;
+  opacity: 0.45;
+  background: radial-gradient(closest-side,
+    hsla(var(--accent-h), var(--accent-s), var(--accent-l), 0.44) 0%,
+    hsla(var(--accent-h), var(--accent-s), var(--accent-l), 0.388) 16.7%,
+    hsla(var(--accent-h), var(--accent-s), var(--accent-l), 0.267) 33.3%,
+    hsla(var(--accent-h), var(--accent-s), var(--accent-l), 0.143) 50%,
+    hsla(var(--accent-h), var(--accent-s), var(--accent-l), 0.06) 66.7%,
+    hsla(var(--accent-h), var(--accent-s), var(--accent-l), 0.019) 83.3%,
+    transparent 100%);
+  animation: floatOrb1 16s ease-in-out infinite alternate;
+}
+
+.orb-2 {
+  width: 653px;
+  height: 653px;
+  max-width: none;
+  max-height: none;
+  top: auto;
+  bottom: -36px;
+  left: -236px;
+  opacity: 0.45;
+  background: radial-gradient(closest-side,
+    rgba(121, 40, 202, 0.506) 0%,
+    rgba(121, 40, 202, 0.447) 16.7%,
+    rgba(121, 40, 202, 0.307) 33.3%,
+    rgba(121, 40, 202, 0.164) 50%,
+    rgba(121, 40, 202, 0.069) 66.7%,
+    rgba(121, 40, 202, 0.022) 83.3%,
+    transparent 100%);
+  animation: floatOrb2 22s ease-in-out infinite alternate;
+}
+
+.orb-3 {
+  width: 608px;
+  height: 608px;
+  max-width: none;
+  max-height: none;
+  top: calc(40% - 144px);
+  left: calc(20% - 144px);
+  opacity: 0.25;
+  background: radial-gradient(closest-side,
+    rgba(0, 112, 243, 0.339) 0%,
+    rgba(0, 112, 243, 0.299) 16.7%,
+    rgba(0, 112, 243, 0.206) 33.3%,
+    rgba(0, 112, 243, 0.11) 50%,
+    rgba(0, 112, 243, 0.046) 66.7%,
+    rgba(0, 112, 243, 0.015) 83.3%,
+    transparent 100%);
+  animation: floatOrb3 18s ease-in-out infinite alternate;
+}
+
+/* v2.0 had no 4th orb and no vignette */
+.orb-4,
+.aura-vignette {
+  display: none;
+}
+
+/* ================= v3.3: progress mode select ================= */
+.glass-select {
+  height: 34px;
+  padding: 0 10px;
+  border-radius: var(--r-full);
+  border: 1px solid var(--rim-mid);
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-primary);
+  font: 600 12px var(--font-body);
+}
+
+.glass-select option {
+  color: #000;
+}

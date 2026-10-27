@@ -116,6 +116,7 @@ const dom = {
   bgSteps: $('bg-steps'),
   bgPlayerStatus: $('bg-player-status'),
   btnBgRefresh: $('btn-bg-refresh'),
+  progressMode: $('progress-mode'),
   bottomDock: $('bottom-dock'),
   btnPlayerSelftest: $('btn-player-selftest'),
   selftestOutput: $('selftest-output'),
@@ -1116,6 +1117,15 @@ function initSettingsEvents() {
   if (dom.btnRunDiagnostics) dom.btnRunDiagnostics.addEventListener('click', runDiagnostics);
   if (dom.btnQualityReport) dom.btnQualityReport.addEventListener('click', runQualityReport);
   if (dom.btnBgRefresh) dom.btnBgRefresh.addEventListener('click', refreshBackgroundStatus);
+  if (dom.progressMode) {
+    postJson('/api/player/progress_mode', {}).then(r => { dom.progressMode.value = r.mode; }).catch(() => {});
+    dom.progressMode.addEventListener('change', async () => {
+      try {
+        await postJson('/api/player/progress_mode', { mode: dom.progressMode.value });
+        showToast('Полоска в уведомлении обновится сразу', 'success');
+      } catch (err) { showToast(err.message, 'error'); }
+    });
+  }
   if (dom.btnPlayerSelftest) dom.btnPlayerSelftest.addEventListener('click', runPlayerSelfTest);
   if (dom.btnLogRefresh) dom.btnLogRefresh.addEventListener('click', loadPlayerLog);
   if (dom.btnLogCopy) dom.btnLogCopy.addEventListener('click', copyPlayerLog);
@@ -1564,7 +1574,10 @@ function initPlayer() {
 
   // Back to the app (e.g. after using the notification): resync at once
   document.addEventListener('visibilitychange', () => {
-    if (!document.hidden && Player.mode === 'native') Player.startPolling();
+    if (!document.hidden && Player.mode === 'native') {
+      Player.startPolling();
+      postJson('/api/player/command', { cmd: 'refresh' }).catch(() => {});
+    }
   });
 
   Player.onChange(renderPlayerUi);
